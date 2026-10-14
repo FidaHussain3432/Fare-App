@@ -10,10 +10,16 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="FareFlow" />
     <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="FareFlow" />
     <title>FareFlow — Fleet & Fare Manager</title>
 
+    <!-- PWA MANIFEST -->
     <link rel="manifest" href="manifest.json" />
-    <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImciIHgxPSIwJSIgeTE9IjAlIiB4Mj0iMTAwJSIgeTE9IjEwMCUiPjxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9IiNmNmQzNjUiLz48c3RvcCBvZmZzZXQ9IjEwMCUiIHN0b3AtY29sb3I9IiNkNGEwMTciLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9IjEwMCIgZmlsbD0iIzBiMGIwZiIvPjx0ZXh0IHg9IjUwJSIgeT0iNTglIiBmb250LWZhbWlseT0iR2VvcmdpYSxzZXJpZiIgZm9udC1zaXplPSIyNjAiIGZvbnQtd2VpZ2h0PSJib2xkIiBmaWxsPSJ1cmwoI2cpIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkb21pbmFudC1iYXNlbGluZT0ibWlkZGxlIj5GPC90ZXh0Pjwvc3ZnPg==" />
+
+    <!-- PWA ICONS (PNG required by Chrome for install) -->
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png" />
+    <link rel="apple-touch-icon" href="icon-192.png" />
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -73,7 +79,7 @@
                 <p class="tagline">Access Pending</p>
             </header>
             <div class="pending-icon">⏳</div>
-            <h2 class="pending-title">Halnr g kar puta tuhnjo cha wan j</h2>
+            <h2 class="pending-title">Approval Pending</h2>
             <p class="pending-msg">
                 Aapka account register ho gaya hai lekin <strong>admin approval</strong> ka intezar hai.
                 Jab tak koi admin aapko approve nahi karta, aap system access nahi kar sakte.
@@ -147,7 +153,7 @@
             </article>
 
             <!-- SUB-TAB: BOYS -->
-            <article id="subtab-boys" class="subtab-panel">
+            <article id="entry-subtab-boys" class="subtab-panel">
                 <section class="glass-card">
                     <header class="card-head">
                         <h2>👦 Boys — Attendance & Fare</h2>
@@ -179,7 +185,7 @@
             </article>
 
             <!-- SUB-TAB: GIRLS -->
-            <article id="subtab-girls" class="subtab-panel">
+            <article id="entry-subtab-girls" class="subtab-panel">
                 <section class="glass-card">
                     <header class="card-head">
                         <h2>👧 Girls — Total Kiraya</h2>
@@ -193,7 +199,7 @@
             </article>
 
             <!-- SUB-TAB: EXPENSES (per-vehicle dynamic) -->
-            <article id="subtab-expenses" class="subtab-panel">
+            <article id="entry-subtab-expenses" class="subtab-panel">
                 <section class="glass-card">
                     <header class="card-head">
                         <h2>💰 Expenses</h2>
@@ -208,7 +214,7 @@
             </article>
 
             <!-- SUB-TAB: SUMMARY -->
-            <article id="subtab-summary" class="subtab-panel">
+            <article id="entry-subtab-summary" class="subtab-panel">
                 <section class="glass-card summary-card">
                     <header class="card-head">
                         <h2>📊 Live Summary</h2>
@@ -265,7 +271,7 @@
                 <button class="subtab" data-subtab="batches" role="tab">
                     <em>🏷️</em><strong>Batches</strong>
                 </button>
-                <button class="subtab" data-subtab="boys" role="tab">
+                <button class="subtab" data-subtab="boysmaster" role="tab">
                     <em>👦</em><strong>Boys List</strong>
                 </button>
                 <button class="subtab" data-subtab="admins" role="tab" id="admins-tab-btn">
@@ -274,7 +280,7 @@
             </nav>
 
             <!-- SETTINGS SUB-TAB: VEHICLES -->
-            <article id="subtab-vehicles" class="subtab-panel active">
+            <article id="settings-subtab-vehicles" class="subtab-panel active">
                 <section class="glass-card">
                     <header class="card-head">
                         <h2>🚐 Vehicle Types</h2>
@@ -289,7 +295,7 @@
             </article>
 
             <!-- SETTINGS SUB-TAB: BATCHES -->
-            <article id="subtab-batches" class="subtab-panel">
+            <article id="settings-subtab-batches" class="subtab-panel">
                 <section class="glass-card">
                     <header class="card-head">
                         <h2>🏷️ Batch Categories</h2>
@@ -304,7 +310,7 @@
             </article>
 
             <!-- SETTINGS SUB-TAB: BOYS MASTER LIST -->
-            <article id="subtab-boys" class="subtab-panel">
+            <article id="settings-subtab-boysmaster" class="subtab-panel">
                 <section class="glass-card">
                     <header class="card-head">
                         <h2>👦 Boys Master List</h2>
@@ -320,7 +326,7 @@
             </article>
 
             <!-- SETTINGS SUB-TAB: ADMINS -->
-            <article id="subtab-admins" class="subtab-panel">
+            <article id="settings-subtab-admins" class="subtab-panel">
                 <section class="glass-card">
                     <header class="card-head">
                         <h2>👑 Admin Management</h2>

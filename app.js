@@ -1,5 +1,5 @@
 /* =====================================================
-   FAREFLOW — MAIN APP LOGIC v2
+   FAREFLOW — MAIN APP LOGIC v2.1
    • Admin gating (super admin: fh87022@gmail.com)
    • Boys list bug fixed (master sync)
    • Today's entry persistence (upsert + auto-load)
@@ -10,6 +10,11 @@
    • PWA install prompt
    • Confirm modal (reusable)
    • Admin management tab
+   FIX v2.1:
+   • Unique subtab IDs (entry-subtab-* / settings-subtab-*)
+   • Boys Master list now renders empty-state clearly
+   • Batch select empty handling (auto-message)
+   • Subtab click routing updated for renamed IDs
    ===================================================== */
 
 /* =====================================================
@@ -29,7 +34,7 @@ const state = {
     girlsTotal: 0,
     toll: 0,
     driver: 0,
-    expenses: {}             // { "Van 1": { toll: 0, driver: 0, tollFree: false, driverFree: false } }
+    expenses: {}             // { "Van 1": { toll, driver, tollFree, driverFree } }
   },
 
   activeBatch: 'all',
@@ -156,7 +161,7 @@ function positionIndicator(container, indicatorSel, activeSel) {
   const width = aRect.width;
 
   ind.style.width = width + 'px';
-  ind.style.transform = `translateX(${left - 4}px)`; // 4px offset (padding compensation)
+  ind.style.transform = `translateX(${left - 4}px)`;
 }
 
 function initTabs() {
@@ -164,14 +169,12 @@ function initTabs() {
   const entrySubs = $('#entry-subtabs');
   const settingsSubs = $('#settings-subtabs');
 
-  // initial positions
   requestAnimationFrame(() => {
     positionIndicator(mainTabs, '.tab-indicator', '.tab.active');
     positionIndicator(entrySubs, '.subtab-indicator', '.subtab.active');
     positionIndicator(settingsSubs, '.subtab-indicator', '.subtab.active');
   });
 
-  // reposition on resize
   let rT;
   window.addEventListener('resize', () => {
     clearTimeout(rT);
@@ -196,7 +199,6 @@ function initAuth() {
       return;
     }
 
-    // Register user + check admin
     try {
       await registerUserSafe(user);
     } catch (e) {
@@ -260,13 +262,13 @@ function showView(name) {
 
 function cleanAuthError(err) {
   const m = err.message || '';
-  if (m.includes('user-not-found'))      return 'Account not found. Create one.';
-  if (m.includes('wrong-password'))      return 'Galat password.';
-  if (m.includes('invalid-email'))       return 'Email invalid hai.';
-  if (m.includes('email-already-in-use'))return 'Email already registered.';
-  if (m.includes('weak-password'))       return 'Password kamzor hai (6+ chars).';
-  if (m.includes('network'))             return 'Network issue. Internet check karein.';
-  if (m.includes('invalid-credential'))  return 'Email ya password galat hai.';
+  if (m.includes('user-not-found'))       return 'Account not found. Create one.';
+  if (m.includes('wrong-password'))       return 'Galat password.';
+  if (m.includes('invalid-email'))        return 'Email invalid hai.';
+  if (m.includes('email-already-in-use')) return 'Email already registered.';
+  if (m.includes('weak-password'))        return 'Password kamzor hai (6+ chars).';
+  if (m.includes('network'))              return 'Network issue. Internet check karein.';
+  if (m.includes('invalid-credential'))   return 'Email ya password galat hai.';
   return m.replace('Firebase: ', '');
 }
 
@@ -274,23 +276,18 @@ function cleanAuthError(err) {
    BOOTSTRAP USER
    ===================================================== */
 async function bootstrapUser(user) {
-  // 1) Config
   const cfg = await loadUserConfigSafe(user.uid);
   state.vehicles   = cfg.vehicles;
   state.batches    = cfg.batches;
   state.boysMaster = cfg.boys;
 
-  // 2) Trips
   state.trips = await loadTripsSafe(user.uid);
 
-  // 3) Cleanup old
   const removed = await cleanupOldTrips(user.uid);
   if (removed > 0) toast(`🧹 ${removed} purane trips delete kiye (3+ months)`);
 
-  // 4) Try load today's entry (upsert feature)
   await loadTodayIntoForm();
 
-  // 5) Render
   renderVehicles();
   renderBatchTabs();
   renderBoysList();
@@ -301,11 +298,9 @@ async function bootstrapUser(user) {
   renderHistory();
   updateSummary();
 
-  // 6) Bind once
   bindStaticEvents();
   initTabs();
 
-  // 7) Admin tab visibility (only admins see Create Admins)
   const adminsTab = $('#admins-tab-btn');
   if (adminsTab) adminsTab.hidden = !state.isAdminUser;
 }
@@ -324,7 +319,6 @@ async function loadTodayIntoForm() {
     return;
   }
 
-  // Populate state.trip from saved trip
   state.loadedTodayId = todayTrip.id;
   state.trip.date       = todayTrip.date || today;
   state.trip.vehicles   = { ...(todayTrip.vehicles || {}) };
@@ -333,7 +327,6 @@ async function loadTodayIntoForm() {
   state.trip.driver     = todayTrip.driver || 0;
   state.trip.expenses   = { ...(todayTrip.expenses || {}) };
 
-  // Boys — rehydrate from master + saved data
   const savedBoys = Array.isArray(todayTrip.boys) ? todayTrip.boys : [];
   const map = new Map();
   savedBoys.forEach(b => map.set(`${b.name}|${b.batch}`, b));
@@ -351,7 +344,6 @@ async function loadTodayIntoForm() {
     };
   });
 
-  // Fill form inputs
   const dEl = $('#trip-date');
   if (dEl) dEl.value = state.trip.date;
   const gEl = $('#girls-total');
@@ -394,23 +386,26 @@ function bindStaticEvents() {
     if (tab.dataset.tab === 'settings' && state.isAdminUser) refreshAdminsTab();
   });
 
-  /* ------- ENTRY SUB-TABS ------- */
-  $$('#tab-entry .subtab').forEach(st => st.onclick = () => {
-    $$('#tab-entry .subtab').forEach(t => t.classList.remove('active'));
+  /* ------- ENTRY SUB-TABS (uses entry-subtab-* IDs) ------- */
+  $$('#entry-subtabs .subtab').forEach(st => st.onclick = () => {
+    $$('#entry-subtabs .subtab').forEach(t => t.classList.remove('active'));
     $$('#tab-entry .subtab-panel').forEach(p => p.classList.remove('active'));
     st.classList.add('active');
-    $('#subtab-' + st.dataset.subtab)?.classList.add('active');
+    const panelId = 'entry-subtab-' + st.dataset.subtab;
+    $('#' + panelId)?.classList.add('active');
     positionIndicator($('#entry-subtabs'), '.subtab-indicator', '.subtab.active');
   });
 
-  /* ------- SETTINGS SUB-TABS ------- */
-  $$('#tab-settings .subtab').forEach(st => st.onclick = () => {
-    $$('#tab-settings .subtab').forEach(t => t.classList.remove('active'));
+  /* ------- SETTINGS SUB-TABS (uses settings-subtab-* IDs) ------- */
+  $$('#settings-subtabs .subtab').forEach(st => st.onclick = () => {
+    $$('#settings-subtabs .subtab').forEach(t => t.classList.remove('active'));
     $$('#tab-settings .subtab-panel').forEach(p => p.classList.remove('active'));
     st.classList.add('active');
-    $('#subtab-' + st.dataset.subtab)?.classList.add('active');
+    const panelId = 'settings-subtab-' + st.dataset.subtab;
+    $('#' + panelId)?.classList.add('active');
     positionIndicator($('#settings-subtabs'), '.subtab-indicator', '.subtab.active');
     if (st.dataset.subtab === 'admins' && state.isAdminUser) refreshAdminsTab();
+    if (st.dataset.subtab === 'boysmaster') renderBoysMaster();
   });
 
   /* ------- INPUT BINDINGS ------- */
@@ -423,7 +418,6 @@ function bindStaticEvents() {
     dateEl.value = state.trip.date;
     dateEl.onchange = async e => {
       state.trip.date = e.target.value || todayISO();
-      // reload entry for that date (upsert feature works only for today's date)
       if (state.user) {
         const trip = await loadTodayTripSafe(state.user.uid, state.trip.date);
         if (trip && state.trip.date === todayISO()) {
@@ -513,10 +507,14 @@ function bindStaticEvents() {
    ===================================================== */
 function renderVehicles() {
   const ul = $('#vehicle-list');
+  if (!ul) return;
   ul.innerHTML = '';
 
   if (!state.vehicles.length) {
-    ul.innerHTML = `<li class="empty-state">Settings → Vehicles mein pehle kuch add karein</li>`;
+    ul.innerHTML = `<li class="empty-state">
+      <strong>Koi vehicle nahi</strong>
+      Settings → Vehicles mein pehle kuch add karein
+    </li>`;
     return;
   }
 
@@ -529,7 +527,6 @@ function renderVehicles() {
     label.className = 'veh-label';
     label.textContent = v;
 
-    // Stepper: [−] value [+]
     const stepper = document.createElement('div');
     stepper.className = 'stepper';
 
@@ -563,8 +560,8 @@ function renderVehicles() {
         li.classList.remove('active');
       }
       updateBtnState();
-      renderExpenses();          // refresh per-vehicle expenses
-      renderBoysList();          // refresh dropdowns
+      renderExpenses();
+      renderBoysList();
       updateSummary();
     };
 
@@ -596,19 +593,20 @@ function renderExpenses() {
   const instances = getVehicleInstances();
 
   if (!instances.length) {
-    ul.innerHTML = `<li class="empty-state">Pehle "Date & Vehicles" tab mein vehicles arrange karein</li>`;
+    ul.innerHTML = `<li class="empty-state">
+      <strong>Pehle vehicles arrange karein</strong>
+      "Date & Vehicles" tab mein vehicles ka count set karein
+    </li>`;
     updateExpenseTotals();
     return;
   }
 
-  // Ensure expense records exist for each instance
   instances.forEach(v => {
     if (!state.trip.expenses[v]) {
       state.trip.expenses[v] = { toll: 0, driver: 0, tollFree: false, driverFree: false };
     }
   });
 
-  // Remove expenses for vehicles that no longer exist
   Object.keys(state.trip.expenses).forEach(k => {
     if (!instances.includes(k)) delete state.trip.expenses[k];
   });
@@ -623,7 +621,6 @@ function renderExpenses() {
     vEl.className = 'exp-veh';
     vEl.textContent = v;
 
-    // Toll input
     const tollIn = document.createElement('input');
     tollIn.type = 'number';
     tollIn.min = 0;
@@ -636,7 +633,6 @@ function renderExpenses() {
       updateSummary();
     };
 
-    // Driver input
     const driverIn = document.createElement('input');
     driverIn.type = 'number';
     driverIn.min = 0;
@@ -649,7 +645,6 @@ function renderExpenses() {
       updateSummary();
     };
 
-    // Free toggle — marks both Toll & Driver as FREE
     const freeLabel = document.createElement('label');
     freeLabel.className = 'free-toggle' + (rec.tollFree && rec.driverFree ? ' on' : '');
 
@@ -689,7 +684,6 @@ function updateExpenseTotals() {
     if (!r.driverFree) driver += +r.driver || 0;
   });
 
-  // Mirror to top-level totals (for summary)
   state.trip.toll   = toll;
   state.trip.driver = driver;
 
@@ -698,7 +692,6 @@ function updateExpenseTotals() {
   if (t1) t1.textContent = fmt(toll);
   if (t2) t2.textContent = fmt(driver);
 
-  // Sync to summary inputs
   const tEl = $('#toll-cost');
   const dEl = $('#driver-cost');
   if (tEl) tEl.value = toll;
@@ -710,6 +703,7 @@ function updateExpenseTotals() {
    ===================================================== */
 function renderBatchTabs() {
   const nav = $('#batch-tabs');
+  if (!nav) return;
   nav.innerHTML = '';
 
   const mkTab = (key, label) => {
@@ -730,21 +724,28 @@ function renderBatchTabs() {
 }
 
 /* =====================================================
-   BOYS LIST
+   BOYS LIST (Entry)
    ===================================================== */
 function renderBoysList() {
   const ul = $('#boys-list');
+  if (!ul) return;
   ul.innerHTML = '';
 
   if (!state.boysMaster.length) {
-    ul.innerHTML = `<li class="empty-state">Settings → Boys List mein pehle boys add karein</li>`;
+    ul.innerHTML = `<li class="empty-state">
+      <strong>Abhi koi boy add nahi hua</strong>
+      Settings → Boys List mein jaa kar boys add karein
+    </li>`;
     updateBulkCount();
     return;
   }
 
   const vehicles = getVehicleInstances();
   if (!vehicles.length) {
-    ul.innerHTML = `<li class="empty-state">Pehle "Date & Vehicles" tab mein vehicle arrange karein</li>`;
+    ul.innerHTML = `<li class="empty-state">
+      <strong>Pehle vehicles arrange karein</strong>
+      "Date & Vehicles" tab mein vehicles ka count set karein
+    </li>`;
     updateBulkCount();
     return;
   }
@@ -756,7 +757,10 @@ function renderBoysList() {
   );
 
   if (!filtered.length) {
-    ul.innerHTML = `<li class="empty-state">Is batch mein koi boy nahi.</li>`;
+    ul.innerHTML = `<li class="empty-state">
+      <strong>Is batch mein koi boy nahi</strong>
+      Doosra batch select karein ya naye boys add karein
+    </li>`;
     updateBulkCount();
     return;
   }
@@ -834,10 +838,8 @@ function syncTripBoys() {
   const vehicles = getVehicleInstances();
   const masterKeys = new Set(state.boysMaster.map(b => `${b.name}|${b.batch}`));
 
-  // Drop entries whose master was deleted
   state.trip.boys = state.trip.boys.filter(b => masterKeys.has(`${b.name}|${b.batch}`));
 
-  // Add missing entries
   const existing = new Set(state.trip.boys.map(b => `${b.name}|${b.batch}`));
   state.boysMaster.forEach(m => {
     const key = `${m.name}|${m.batch}`;
@@ -853,7 +855,6 @@ function syncTripBoys() {
     }
   });
 
-  // Fix stale vehicle refs
   state.trip.boys.forEach(b => {
     if (!vehicles.includes(b.vehicle)) b.vehicle = vehicles[0] || '';
   });
@@ -914,7 +915,6 @@ function updateSummary() {
   const boysTotal = present.reduce((s, b) => s + (+b.fare || 0), 0);
   const girls     = +($('#girls-total')?.value) || state.trip.girlsTotal || 0;
 
-  // Compute toll/driver from per-vehicle expenses
   let toll = 0, driver = 0;
   Object.values(state.trip.expenses || {}).forEach(r => {
     if (!r.tollFree)   toll   += +r.toll   || 0;
@@ -995,11 +995,9 @@ async function saveTrip() {
     let result;
 
     if (state.trip.date === today) {
-      // UPSERT for today
       result = await saveTodayTripSafe(state.user.uid, today, payload);
       state.loadedTodayId = result.id;
     } else {
-      // Past/future date → regular add
       const id = await saveTripSafe(state.user.uid, payload);
       result = { id, updated: false };
     }
@@ -1010,7 +1008,6 @@ async function saveTrip() {
     state.trips = await loadTripsSafe(state.user.uid);
     renderHistory();
 
-    // Don't reset form for today's entry (so user can keep editing)
     if (state.trip.date !== today) resetTripForm();
   } catch (err) {
     toast('❌ Save fail: ' + (err.message || err.code));
@@ -1067,7 +1064,6 @@ function renderHistory(filter = '') {
     const li = document.createElement('li');
     li.className = 'history-item' + (state.historySelected.has(t.id) ? ' selected' : '');
 
-    // Checkbox
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.className = 'history-check';
@@ -1080,7 +1076,6 @@ function renderHistory(filter = '') {
       updateHistoryCount();
     };
 
-    // Body
     const body = document.createElement('div');
     body.className = 'hist-body';
     body.style.cursor = 'pointer';
@@ -1173,7 +1168,6 @@ function showTripDetails(t) {
     `);
   }
 
-  // Expenses breakdown (per vehicle)
   const exp = t.expenses || {};
   if (Object.keys(exp).length) {
     const rows = Object.entries(exp).map(([veh, r]) => {
@@ -1221,6 +1215,7 @@ function showTripDetails(t) {
    ===================================================== */
 function renderVehicleSettings() {
   const ul = $('#vehicle-settings');
+  if (!ul) return;
   ul.innerHTML = '';
 
   if (!state.vehicles.length) {
@@ -1260,6 +1255,7 @@ function renderVehicleSettings() {
    ===================================================== */
 function renderBatchSettings() {
   const ul = $('#batch-settings');
+  if (!ul) return;
   ul.innerHTML = '';
 
   if (!state.batches.length) {
@@ -1286,6 +1282,7 @@ function renderBatchSettings() {
       renderBatchSettings();
       renderBatchTabs();
       renderBoysList();
+      renderBoysMaster();
       toast('Batch removed');
     };
     li.append(rm);
@@ -1295,21 +1292,39 @@ function renderBatchSettings() {
 
 /* =====================================================
    SETTINGS — BOYS MASTER
+   FIX v2.1: Emits clear empty-state message and
+   handles the case when no batches exist.
    ===================================================== */
 function renderBoysMaster() {
   const ul = $('#boys-master');
   const sel = $('#master-batch');
+  if (!ul || !sel) return;
+
   ul.innerHTML = '';
   sel.innerHTML = '';
 
-  state.batches.forEach(b => {
-    const o = document.createElement('option');
-    o.value = b; o.textContent = b;
-    sel.append(o);
-  });
+  // Populate batch dropdown
+  if (!state.batches.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '— Pehle batch add karein —';
+    opt.disabled = true;
+    opt.selected = true;
+    sel.append(opt);
+  } else {
+    state.batches.forEach(b => {
+      const o = document.createElement('option');
+      o.value = b; o.textContent = b;
+      sel.append(o);
+    });
+  }
 
+  // Empty boys list
   if (!state.boysMaster.length) {
-    ul.innerHTML = `<li class="empty-state">Abhi koi boy add nahi. Upar form se add karein.</li>`;
+    ul.innerHTML = `<li class="empty-state">
+      <strong>Abhi koi boy add nahi hua</strong>
+      Upar form se naam + batch select karke add karein
+    </li>`;
     return;
   }
 
@@ -1418,8 +1433,10 @@ async function addBoyMaster(e) {
   e.preventDefault();
   const name = $('#master-name').value.trim();
   const batch = $('#master-batch').value;
+
   if (!name) return toast('Name daalein');
-  if (!batch) return toast('Pehle koi batch add karein');
+  if (!state.batches.length) return toast('Pehle Batches tab mein koi batch add karein');
+  if (!batch) return toast('Batch select karein');
 
   const dup = state.boysMaster.some(
     b => b.name.toLowerCase() === name.toLowerCase() && String(b.batch) === String(batch)
@@ -1435,7 +1452,7 @@ async function addBoyMaster(e) {
 }
 
 /* =====================================================
-   ADMINS TAB — refresh + render + grant/revoke
+   ADMINS TAB
    ===================================================== */
 async function refreshAdminsTab() {
   if (!state.isAdminUser) return;
@@ -1476,7 +1493,6 @@ async function refreshAdminsTab() {
       small.textContent = isSelf ? 'You' : (isAdm ? 'Admin' : 'User');
       info.append(strong, small);
 
-      // Action button
       const btn = document.createElement('button');
       btn.className = 'mini-btn ' + (isAdm ? 'red' : 'gold');
       btn.textContent = isAdm ? 'Revoke' : 'Make Admin';
@@ -1519,7 +1535,6 @@ function initPWA() {
   const dismissBtn = $('#pwa-dismiss');
   if (!promptEl) return;
 
-  // Skip if already installed / dismissed
   if (window.matchMedia('(display-mode: standalone)').matches) return;
   if (localStorage.getItem('ff-pwa-dismissed') === '1') return;
 
