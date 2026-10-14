@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="system">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0b0f" />
+    <meta name="description" content="FareFlow — Fleet, Fare & Batch Management System" />
+    <title>FareFlow — Fleet & Fare Manager</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+
+    <!-- THREE.JS CANVAS -->
+    <canvas id="bg-canvas" aria-hidden="true"></canvas>
+
+    <!-- ================= LOGIN VIEW ================= -->
+    <main id="login-view" class="view active">
+        <form id="login-form" class="glass-card auth-card">
+            <header class="auth-header">
+                <h1 class="brand">FareFlow</h1>
+                <p class="tagline">Fleet • Fare • Finance</p>
+            </header>
+
+            <label class="field">
+                <input type="email" id="email" placeholder=" " required autocomplete="email" />
+                <em>Email</em>
+            </label>
+
+            <label class="field">
+                <input type="password" id="password" placeholder=" " required autocomplete="current-password" />
+                <em>Password</em>
+            </label>
+
+            <button type="submit" class="btn-primary ripple"><strong>Sign In</strong></button>
+            <button type="button" id="signup-btn" class="btn-ghost">Create Account</button>
+            <p id="auth-msg" class="auth-msg" role="alert"></p>
+        </form>
+    </main>
+
+    <!-- ================= DASHBOARD VIEW ================= -->
+    <main id="app-view" class="view">
+
+        <!-- APP HEADER -->
+        <nav class="app-nav glass-card">
+            <h1 class="brand-small">FareFlow</h1>
+            <menu class="nav-actions">
+                <button id="theme-toggle" class="icon-btn" title="Toggle theme" aria-label="Toggle theme">🌓</button>
+                <button id="logout-btn" class="icon-btn" title="Logout" aria-label="Logout">⏏</button>
+            </menu>
+        </nav>
+
+        <!-- TOP TABS -->
+        <nav class="tabs glass-card" role="tablist">
+            <button class="tab active" data-tab="entry" role="tab">📝 Entry</button>
+            <button class="tab" data-tab="history" role="tab">📚 History</button>
+            <button class="tab" data-tab="settings" role="tab">⚙️ Settings</button>
+        </nav>
+
+        <!-- ============ TAB: ENTRY ============ -->
+        <section id="tab-entry" class="tab-panel active">
+
+            <!-- ENTRY SUB-TABS -->
+            <nav class="subtabs glass-card" role="tablist">
+                <button class="subtab active" data-subtab="trip" role="tab">
+                    <em>1</em><strong>Date & Vehicles</strong>
+                </button>
+                <button class="subtab" data-subtab="boys" role="tab">
+                    <em>2</em><strong>Boys</strong>
+                </button>
+                <button class="subtab" data-subtab="girls" role="tab">
+                    <em>3</em><strong>Girls</strong>
+                </button>
+                <button class="subtab" data-subtab="expenses" role="tab">
+                    <em>4</em><strong>Expenses</strong>
+                </button>
+                <button class="subtab" data-subtab="summary" role="tab">
+                    <em>5</em><strong>Summary</strong>
+                </button>
+            </nav>
+
+            <!-- SUB-TAB: TRIP / DATE & VEHICLES -->
+            <article id="subtab-trip" class="subtab-panel active">
+                <section class="glass-card">
+                    <header class="card-head">
+                        <h2>📅 Trip Date</h2>
+                        <p class="hint">Trip ki tareekh select karein</p>
+                    </header>
+                    <label class="field">
+                        <input type="date" id="trip-date" required />
+                        <em>Select Date</em>
+                    </label>
+
+                    <header class="card-head mt">
+                        <h2>🚐 Vehicles Arranged</h2>
+                        <p class="hint">Har vehicle ka count set karein (0 = not arranged)</p>
+                    </header>
+                    <ul id="vehicle-list" class="vehicle-grid"></ul>
+                </section>
+            </article>
+
+            <!-- SUB-TAB: BOYS -->
+            <article id="subtab-boys" class="subtab-panel">
+                <section class="glass-card">
+                    <header class="card-head">
+                        <h2>👦 Boys — Attendance & Fare</h2>
+                        <p class="hint">Batch tab se filter karein. Absent checkbox + bulk fare entry available hai.</p>
+                    </header>
+
+                    <!-- BATCH FILTER TABS -->
+                    <nav id="batch-tabs" class="batch-tabs" role="tablist">
+                        <button class="batch-tab active" data-batch="all">All</button>
+                    </nav>
+
+                    <!-- BULK ACTION BAR -->
+                    <aside id="bulk-bar" class="bulk-bar">
+                        <menu class="bulk-left">
+                            <button type="button" id="select-all-btn" class="mini-btn">✓ All</button>
+                            <button type="button" id="clear-sel-btn" class="mini-btn">✕ Clear</button>
+                            <small id="sel-count">0 selected</small>
+                        </menu>
+                        <menu class="bulk-right">
+                            <input type="number" id="bulk-fare" placeholder="Fare" min="0" class="bulk-input" />
+                            <button type="button" id="apply-fare-btn" class="mini-btn gold">Apply Fare</button>
+                            <button type="button" id="mark-absent-btn" class="mini-btn red">Absent</button>
+                            <button type="button" id="mark-present-btn" class="mini-btn green">Present</button>
+                        </menu>
+                    </aside>
+
+                    <ul id="boys-list" class="boys-list"></ul>
+                </section>
+            </article>
+
+            <!-- SUB-TAB: GIRLS -->
+            <article id="subtab-girls" class="subtab-panel">
+                <section class="glass-card">
+                    <header class="card-head">
+                        <h2>👧 Girls — Total Kiraya</h2>
+                        <p class="hint">Admin manually total likhega (koi naam nahi)</p>
+                    </header>
+                    <label class="field">
+                        <input type="number" id="girls-total" placeholder=" " min="0" value="0" />
+                        <em>Girls Jo Total Kirayo (PKR)</em>
+                    </label>
+                </section>
+            </article>
+
+            <!-- SUB-TAB: EXPENSES -->
+            <article id="subtab-expenses" class="subtab-panel">
+                <section class="glass-card">
+                    <header class="card-head">
+                        <h2>💰 Expenses</h2>
+                        <p class="hint">Toll + Driver cost</p>
+                    </header>
+                    <label class="field">
+                        <input type="number" id="toll-cost" placeholder=" " min="0" value="0" />
+                        <em>Total Toll (PKR)</em>
+                    </label>
+                    <label class="field">
+                        <input type="number" id="driver-cost" placeholder=" " min="0" value="0" />
+                        <em>Total Driver Cost (PKR)</em>
+                    </label>
+                </section>
+            </article>
+
+            <!-- SUB-TAB: SUMMARY -->
+            <article id="subtab-summary" class="subtab-panel">
+                <section class="glass-card summary-card">
+                    <header class="card-head">
+                        <h2>📊 Live Summary</h2>
+                        <p class="hint">Real-time calculation</p>
+                    </header>
+                    <ul class="summary-list">
+                        <li><em>Present Boys</em><strong id="sum-present">0</strong></li>
+                        <li><em>Absent Boys</em><strong id="sum-absent">0</strong></li>
+                        <li><em>Boys Collected</em><strong id="sum-boys">Rs 0</strong></li>
+                        <li><em>Girls Collected</em><strong id="sum-girls">Rs 0</strong></li>
+                        <li class="total"><em>Total Fare</em><strong id="sum-total">Rs 0</strong></li>
+                        <li><em>Toll</em><strong id="sum-toll">Rs 0</strong></li>
+                        <li><em>Driver Cost</em><strong id="sum-driver">Rs 0</strong></li>
+                        <li id="net-row" class="net"><em>Net Balance</em><strong id="sum-net">Rs 0</strong></li>
+                    </ul>
+                    <button type="button" id="save-trip" class="btn-primary ripple">
+                        <strong>💾 Save Trip</strong>
+                    </button>
+                </section>
+            </article>
+
+        </section>
+
+        <!-- ============ TAB: HISTORY ============ -->
+        <section id="tab-history" class="tab-panel">
+            <article class="glass-card">
+                <header class="card-head">
+                    <h2>📚 Saved Trips (Last 3 Months)</h2>
+                    <input type="search" id="history-search" placeholder="Search by date (YYYY-MM-DD)…" class="search-input" />
+                </header>
+                <ul id="history-list" class="history-list"></ul>
+            </article>
+        </section>
+
+        <!-- ============ TAB: SETTINGS ============ -->
+        <section id="tab-settings" class="tab-panel">
+
+            <!-- SETTINGS SUB-TABS -->
+            <nav class="subtabs glass-card" role="tablist">
+                <button class="subtab active" data-subtab="vehicles" role="tab">
+                    <em>🚐</em><strong>Vehicles</strong>
+                </button>
+                <button class="subtab" data-subtab="batches" role="tab">
+                    <em>🏷️</em><strong>Batches</strong>
+                </button>
+                <button class="subtab" data-subtab="boys" role="tab">
+                    <em>👦</em><strong>Boys List</strong>
+                </button>
+            </nav>
+
+            <!-- SETTINGS SUB-TAB: VEHICLES -->
+            <article id="subtab-vehicles" class="subtab-panel active">
+                <section class="glass-card">
+                    <header class="card-head">
+                        <h2>🚐 Vehicle Types</h2>
+                        <p class="hint">Add/remove vehicle categories</p>
+                    </header>
+                    <ul id="vehicle-settings" class="chip-list"></ul>
+                    <form id="add-vehicle-form" class="inline-form">
+                        <input type="text" id="new-vehicle" placeholder="e.g. Hiace" required />
+                        <button type="submit" class="btn-primary small">+</button>
+                    </form>
+                </section>
+            </article>
+
+            <!-- SETTINGS SUB-TAB: BATCHES -->
+            <article id="subtab-batches" class="subtab-panel">
+                <section class="glass-card">
+                    <header class="card-head">
+                        <h2>🏷️ Batch Categories</h2>
+                        <p class="hint">Batch numbers manage karein (e.g. 24, 25, 26)</p>
+                    </header>
+                    <ul id="batch-settings" class="chip-list"></ul>
+                    <form id="add-batch-form" class="inline-form">
+                        <input type="text" id="new-batch" placeholder="e.g. 27" required />
+                        <button type="submit" class="btn-primary small">+</button>
+                    </form>
+                </section>
+            </article>
+
+            <!-- SETTINGS SUB-TAB: BOYS MASTER LIST -->
+            <article id="subtab-boys" class="subtab-panel">
+                <section class="glass-card">
+                    <header class="card-head">
+                        <h2>👦 Boys Master List</h2>
+                        <p class="hint">Yahan ek dafa boys add karein (Name + Batch). Entry tab mein yeh automatically aayenge.</p>
+                    </header>
+                    <ul id="boys-master" class="boys-master"></ul>
+                    <form id="add-boy-master" class="inline-form">
+                        <input type="text" id="master-name" placeholder="Boy name" required />
+                        <select id="master-batch" required></select>
+                        <button type="submit" class="btn-primary small">+</button>
+                    </form>
+                </section>
+            </article>
+        </section>
+
+    </main>
+
+    <!-- ================= DETAIL MODAL ================= -->
+    <dialog id="detail-modal" class="glass-card modal">
+        <header class="modal-head">
+            <h2 id="modal-title">Trip Details</h2>
+            <button id="modal-close" class="icon-btn">✕</button>
+        </header>
+        <section id="modal-body" class="modal-body"></section>
+    </dialog>
+
+    <!-- ================= TOAST ================= -->
+    <output id="toast" class="toast" aria-live="polite"></output>
+
+    <!-- ================= SCRIPTS ================= -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-analytics-compat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script src="firebase.js"></script>
+    <script src="three-bg.js"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>
