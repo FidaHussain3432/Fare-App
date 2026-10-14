@@ -1,6 +1,15 @@
 /* =====================================================
-   FAREFLOW — MAIN APP LOGIC
-   Aik admin = aik user. Data per-user via uid.
+   FAREFLOW — MAIN APP LOGIC v2
+   • Admin gating (super admin: fh87022@gmail.com)
+   • Boys list bug fixed (master sync)
+   • Today's entry persistence (upsert + auto-load)
+   • Vehicle stepper (− / +) — no keyboard
+   • Per-vehicle expenses with "Free" toggle
+   • Sliding gold tab indicators
+   • History bulk delete
+   • PWA install prompt
+   • Confirm modal (reusable)
+   • Admin management tab
    ===================================================== */
 
 /* =====================================================
@@ -8,21 +17,28 @@
    ===================================================== */
 const state = {
   user: null,
-  vehicles: [],          // ['Bus', 'Van', ...]
-  batches: [],           // ['24', '25', '26', ...]
-  boysMaster: [],        // [{ name, batch }, ...]
+  isAdminUser: false,
+  vehicles: [],
+  batches: [],
+  boysMaster: [],
 
   trip: {
     date: new Date().toISOString().slice(0, 10),
-    vehicles: {},        // { Van: 2, Bus: 1 }  → resolved: Van 1, Van 2, Bus 1
-    boys: [],            // [{ masterId, name, batch, vehicle, fare, absent, selected }]
+    vehicles: {},            // { Van: 2, Bus: 1 }
+    boys: [],                // [{ name, batch, vehicle, fare, absent, selected }]
     girlsTotal: 0,
     toll: 0,
-    driver: 0
+    driver: 0,
+    expenses: {}             // { "Van 1": { toll: 0, driver: 0, tollFree: false, driverFree: false } }
   },
 
-  activeBatch: 'all',    // batch tab filter
-  trips: []              // history list
+  activeBatch: 'all',
+  trips: [],
+  historySelected: new Set(),
+  adminsCache: [],
+  usersCache: [],
+  pwaPrompt: null,
+  loadedTodayId: null
 };
 
 /* =====================================================
@@ -35,6 +51,10 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({
   '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
 }[c]));
 
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function toast(msg, ms = 2200) {
   const el = $('#toast');
   if (!el) return;
@@ -44,15 +64,41 @@ function toast(msg, ms = 2200) {
   el._t = setTimeout(() => el.classList.remove('show'), ms);
 }
 
+/* Reusable confirm modal → returns Promise<boolean> */
+function confirmDialog(title, msg, okText = 'Confirm') {
+  return new Promise(resolve => {
+    const modal = $('#confirm-modal');
+    $('#confirm-title').textContent = title;
+    $('#confirm-msg').textContent = msg;
+    const ok = $('#confirm-ok');
+    const cancel = $('#confirm-cancel');
+    ok.querySelector('strong').textContent = okText;
+
+    const cleanup = () => {
+      ok.removeEventListener('click', onOk);
+      cancel.removeEventListener('click', onCancel);
+      modal.removeEventListener('cancel', onCancel);
+    };
+    const onOk = () => { cleanup(); modal.close(); resolve(true); };
+    const onCancel = () => { cleanup(); modal.close(); resolve(false); };
+
+    ok.addEventListener('click', onOk);
+    cancel.addEventListener('click', onCancel);
+    modal.addEventListener('cancel', onCancel);
+
+    modal.showModal();
+  });
+}
+
 /* =====================================================
-   VEHICLE LABELS — "Van 1", "Van 2" …
-   Returns FLAT list of concrete vehicle instances
-   Example: { Van: 2, Bus: 1 } → ['Van 1', 'Van 2', 'Bus 1']
+   VEHICLE INSTANCES — flat list of concrete vehicles
+   { Van: 2, Bus: 1 } → ['Van 1', 'Van 2', 'Bus 1']
    ===================================================== */
 function getVehicleInstances() {
   const out = [];
   Object.entries(state.trip.vehicles).forEach(([name, qty]) => {
     const n = Math.max(0, Number(qty) || 0);
+    if (n === 0) return;
     if (n === 1) out.push(name);
     else for (let i = 1; i <= n; i++) out.push(`${name} ${i}`);
   });
@@ -66,7 +112,8 @@ function initTheme() {
   const saved = localStorage.getItem('ff-theme') || 'system';
   applyTheme(saved, false);
 
-  $('#theme-toggle').onclick = () => {
+  const btn = $('#theme-toggle');
+  if (btn) btn.onclick = () => {
     const cur = localStorage.getItem('ff-theme') || 'system';
     const next = cur === 'dark' ? 'light' : cur === 'light' ? 'system' : 'dark';
     localStorage.setItem('ff-theme', next);
@@ -82,6 +129,12 @@ function applyTheme(mode, animate = true) {
     resolved = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   }
   document.documentElement.dataset.theme = resolved;
+  // refresh indicators after theme change
+  requestAnimationFrame(() => {
+    positionIndicator($('#main-tabs'), '.tab-indicator', '.tab.active');
+    positionIndicator($('#entry-subtabs'), '.subtab-indicator', '.subtab.active');
+    positionIndicator($('#settings-subtabs'), '.subtab-indicator', '.subtab.active');
+  });
 }
 
 window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
@@ -89,19 +142,79 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', ()
 });
 
 /* =====================================================
+   SLIDING TAB INDICATOR
+   ===================================================== */
+function positionIndicator(container, indicatorSel, activeSel) {
+  if (!container) return;
+  const ind = container.querySelector(indicatorSel);
+  const active = container.querySelector(activeSel);
+  if (!ind || !active) return;
+
+  const cRect = container.getBoundingClientRect();
+  const aRect = active.getBoundingClientRect();
+  const left = aRect.left - cRect.left;
+  const width = aRect.width;
+
+  ind.style.width = width + 'px';
+  ind.style.transform = `translateX(${left - 4}px)`; // 4px offset (padding compensation)
+}
+
+function initTabs() {
+  const mainTabs = $('#main-tabs');
+  const entrySubs = $('#entry-subtabs');
+  const settingsSubs = $('#settings-subtabs');
+
+  // initial positions
+  requestAnimationFrame(() => {
+    positionIndicator(mainTabs, '.tab-indicator', '.tab.active');
+    positionIndicator(entrySubs, '.subtab-indicator', '.subtab.active');
+    positionIndicator(settingsSubs, '.subtab-indicator', '.subtab.active');
+  });
+
+  // reposition on resize
+  let rT;
+  window.addEventListener('resize', () => {
+    clearTimeout(rT);
+    rT = setTimeout(() => {
+      positionIndicator(mainTabs, '.tab-indicator', '.tab.active');
+      positionIndicator(entrySubs, '.subtab-indicator', '.subtab.active');
+      positionIndicator(settingsSubs, '.subtab-indicator', '.subtab.active');
+    }, 100);
+  }, { passive: true });
+}
+
+/* =====================================================
    AUTH
    ===================================================== */
 function initAuth() {
   auth.onAuthStateChanged(async user => {
     state.user = user;
-    if (user) {
-      $('#login-view').classList.remove('active');
-      $('#app-view').classList.add('active');
-      await bootstrapUser(user);
-    } else {
-      $('#app-view').classList.remove('active');
-      $('#login-view').classList.add('active');
+
+    if (!user) {
+      state.isAdminUser = false;
+      showView('login');
+      return;
     }
+
+    // Register user + check admin
+    try {
+      await registerUserSafe(user);
+    } catch (e) {
+      console.warn('registerUserSafe failed:', e);
+    }
+
+    const admin = await isAdmin(user.uid);
+    state.isAdminUser = admin;
+
+    if (!admin) {
+      const pe = $('#pending-email');
+      if (pe) pe.textContent = user.email || '';
+      showView('pending');
+      return;
+    }
+
+    showView('app');
+    await bootstrapUser(user);
   });
 
   $('#login-form').onsubmit = async e => {
@@ -135,6 +248,14 @@ function initAuth() {
   };
 
   $('#logout-btn').onclick = () => auth.signOut();
+  const pendingLogout = $('#pending-logout');
+  if (pendingLogout) pendingLogout.onclick = () => auth.signOut();
+}
+
+function showView(name) {
+  $('#login-view').classList.toggle('active', name === 'login');
+  $('#pending-view').classList.toggle('active', name === 'pending');
+  $('#app-view').classList.toggle('active', name === 'app');
 }
 
 function cleanAuthError(err) {
@@ -145,6 +266,7 @@ function cleanAuthError(err) {
   if (m.includes('email-already-in-use'))return 'Email already registered.';
   if (m.includes('weak-password'))       return 'Password kamzor hai (6+ chars).';
   if (m.includes('network'))             return 'Network issue. Internet check karein.';
+  if (m.includes('invalid-credential'))  return 'Email ya password galat hai.';
   return m.replace('Firebase: ', '');
 }
 
@@ -152,29 +274,105 @@ function cleanAuthError(err) {
    BOOTSTRAP USER
    ===================================================== */
 async function bootstrapUser(user) {
-  // 1) Config load
+  // 1) Config
   const cfg = await loadUserConfigSafe(user.uid);
   state.vehicles   = cfg.vehicles;
   state.batches    = cfg.batches;
   state.boysMaster = cfg.boys;
 
-  // 2) Trips load (with history bug fix)
+  // 2) Trips
   state.trips = await loadTripsSafe(user.uid);
 
-  // 3) Cleanup old (3+ months)
+  // 3) Cleanup old
   const removed = await cleanupOldTrips(user.uid);
   if (removed > 0) toast(`🧹 ${removed} purane trips delete kiye (3+ months)`);
 
-  // 4) Render everything
+  // 4) Try load today's entry (upsert feature)
+  await loadTodayIntoForm();
+
+  // 5) Render
   renderVehicles();
   renderBatchTabs();
   renderBoysList();
   renderBatchSettings();
   renderBoysMaster();
   renderVehicleSettings();
+  renderExpenses();
   renderHistory();
-  bindStaticEvents();
   updateSummary();
+
+  // 6) Bind once
+  bindStaticEvents();
+  initTabs();
+
+  // 7) Admin tab visibility (only admins see Create Admins)
+  const adminsTab = $('#admins-tab-btn');
+  if (adminsTab) adminsTab.hidden = !state.isAdminUser;
+}
+
+/* =====================================================
+   LOAD TODAY'S ENTRY INTO FORM
+   ===================================================== */
+async function loadTodayIntoForm() {
+  if (!state.user) return;
+
+  const today = todayISO();
+  const todayTrip = await loadTodayTripSafe(state.user.uid, today);
+  if (!todayTrip) {
+    state.loadedTodayId = null;
+    updateSaveHint();
+    return;
+  }
+
+  // Populate state.trip from saved trip
+  state.loadedTodayId = todayTrip.id;
+  state.trip.date       = todayTrip.date || today;
+  state.trip.vehicles   = { ...(todayTrip.vehicles || {}) };
+  state.trip.girlsTotal = todayTrip.girlsTotal || 0;
+  state.trip.toll       = todayTrip.toll || 0;
+  state.trip.driver     = todayTrip.driver || 0;
+  state.trip.expenses   = { ...(todayTrip.expenses || {}) };
+
+  // Boys — rehydrate from master + saved data
+  const savedBoys = Array.isArray(todayTrip.boys) ? todayTrip.boys : [];
+  const map = new Map();
+  savedBoys.forEach(b => map.set(`${b.name}|${b.batch}`, b));
+
+  state.trip.boys = state.boysMaster.map(m => {
+    const key = `${m.name}|${m.batch}`;
+    const saved = map.get(key);
+    return {
+      name: m.name,
+      batch: m.batch,
+      vehicle: saved?.vehicle || '',
+      fare: saved?.fare || 0,
+      absent: !!saved?.absent,
+      selected: false
+    };
+  });
+
+  // Fill form inputs
+  const dEl = $('#trip-date');
+  if (dEl) dEl.value = state.trip.date;
+  const gEl = $('#girls-total');
+  if (gEl) gEl.value = state.trip.girlsTotal;
+  const tEl = $('#toll-cost');
+  if (tEl) tEl.value = state.trip.toll;
+  const drEl = $('#driver-cost');
+  if (drEl) drEl.value = state.trip.driver;
+
+  toast('📝 Today\'s entry loaded');
+  updateSaveHint();
+}
+
+function updateSaveHint() {
+  const hint = $('#save-hint');
+  if (!hint) return;
+  if (state.loadedTodayId) {
+    hint.textContent = '✓ Aaj ki entry mojood hai — Save karke update karein';
+  } else {
+    hint.textContent = '';
+  }
 }
 
 /* =====================================================
@@ -191,6 +389,9 @@ function bindStaticEvents() {
     $$('.tab-panel').forEach(p => p.classList.remove('active'));
     tab.classList.add('active');
     $('#tab-' + tab.dataset.tab)?.classList.add('active');
+    positionIndicator($('#main-tabs'), '.tab-indicator', '.tab.active');
+    if (tab.dataset.tab === 'history') renderHistory();
+    if (tab.dataset.tab === 'settings' && state.isAdminUser) refreshAdminsTab();
   });
 
   /* ------- ENTRY SUB-TABS ------- */
@@ -199,6 +400,7 @@ function bindStaticEvents() {
     $$('#tab-entry .subtab-panel').forEach(p => p.classList.remove('active'));
     st.classList.add('active');
     $('#subtab-' + st.dataset.subtab)?.classList.add('active');
+    positionIndicator($('#entry-subtabs'), '.subtab-indicator', '.subtab.active');
   });
 
   /* ------- SETTINGS SUB-TABS ------- */
@@ -207,6 +409,8 @@ function bindStaticEvents() {
     $$('#tab-settings .subtab-panel').forEach(p => p.classList.remove('active'));
     st.classList.add('active');
     $('#subtab-' + st.dataset.subtab)?.classList.add('active');
+    positionIndicator($('#settings-subtabs'), '.subtab-indicator', '.subtab.active');
+    if (st.dataset.subtab === 'admins' && state.isAdminUser) refreshAdminsTab();
   });
 
   /* ------- INPUT BINDINGS ------- */
@@ -215,14 +419,41 @@ function bindStaticEvents() {
   const tollEl   = $('#toll-cost');
   const driverEl = $('#driver-cost');
 
-  dateEl.value   = state.trip.date;
-  dateEl.onchange = e => { state.trip.date = e.target.value; };
+  if (dateEl) {
+    dateEl.value = state.trip.date;
+    dateEl.onchange = async e => {
+      state.trip.date = e.target.value || todayISO();
+      // reload entry for that date (upsert feature works only for today's date)
+      if (state.user) {
+        const trip = await loadTodayTripSafe(state.user.uid, state.trip.date);
+        if (trip && state.trip.date === todayISO()) {
+          await loadTodayIntoForm();
+          renderVehicles();
+          renderBoysList();
+          renderExpenses();
+          updateSummary();
+        }
+      }
+    };
+  }
 
-  girlsEl.oninput  = e => { state.trip.girlsTotal = +e.target.value || 0; updateSummary(); };
-  tollEl.oninput   = e => { state.trip.toll       = +e.target.value || 0; updateSummary(); };
-  driverEl.oninput = e => { state.trip.driver     = +e.target.value || 0; updateSummary(); };
+  if (girlsEl)  girlsEl.oninput  = e => { state.trip.girlsTotal = +e.target.value || 0; updateSummary(); };
+  if (tollEl)   tollEl.oninput   = e => { state.trip.toll       = +e.target.value || 0; updateSummary(); };
+  if (driverEl) driverEl.oninput = e => { state.trip.driver     = +e.target.value || 0; updateSummary(); };
 
   $('#save-trip').onclick = saveTrip;
+
+  const clearBtn = $('#clear-today');
+  if (clearBtn) clearBtn.onclick = async () => {
+    const ok = await confirmDialog(
+      'Clear Today\'s Entry',
+      'Kya aap aaj ki entry clear karna chahte hain? Form reset ho jayega lekin saved data Firestore mein rahega.',
+      'Clear'
+    );
+    if (!ok) return;
+    resetTripForm();
+    toast('🗑️ Form cleared');
+  };
 
   /* ------- BULK ACTIONS ------- */
   $('#select-all-btn').onclick  = () => bulkSelect(true);
@@ -236,22 +467,54 @@ function bindStaticEvents() {
   $('#add-batch-form').onsubmit   = addBatch;
   $('#add-boy-master').onsubmit   = addBoyMaster;
 
-  /* ------- HISTORY SEARCH ------- */
+  /* ------- HISTORY ------- */
   $('#history-search').oninput = e => renderHistory(e.target.value);
+
+  const selectAllBtn = $('#history-select-all');
+  if (selectAllBtn) selectAllBtn.onclick = () => {
+    state.trips.forEach(t => state.historySelected.add(t.id));
+    renderHistory($('#history-search').value);
+  };
+  const clearSelBtn = $('#history-clear-sel');
+  if (clearSelBtn) clearSelBtn.onclick = () => {
+    state.historySelected.clear();
+    renderHistory($('#history-search').value);
+  };
+  const delBtn = $('#history-delete-btn');
+  if (delBtn) delBtn.onclick = async () => {
+    const ids = [...state.historySelected];
+    if (!ids.length) return toast('Pehle trips select karein');
+    const ok = await confirmDialog(
+      'Delete Trips',
+      `${ids.length} trip(s) permanently delete ho jayenge. Ye action undo nahi ho sakta.`,
+      'Delete'
+    );
+    if (!ok) return;
+    const removed = await deleteTripsBulkSafe(ids);
+    toast(`🗑️ ${removed} trip(s) delete`);
+    state.historySelected.clear();
+    state.trips = await loadTripsSafe(state.user.uid);
+    renderHistory($('#history-search').value);
+  };
 
   /* ------- MODAL ------- */
   $('#modal-close').onclick = () => $('#detail-modal').close();
   $('#detail-modal').addEventListener('click', e => {
     if (e.target === $('#detail-modal')) $('#detail-modal').close();
   });
+
+  /* ------- ADMINS TAB ------- */
+  const refreshAdmins = $('#refresh-users-btn');
+  if (refreshAdmins) refreshAdmins.onclick = refreshAdminsTab;
 }
 
 /* =====================================================
-   VEHICLES — RENDER
+   VEHICLES — RENDER (with stepper)
    ===================================================== */
 function renderVehicles() {
   const ul = $('#vehicle-list');
   ul.innerHTML = '';
+
   if (!state.vehicles.length) {
     ul.innerHTML = `<li class="empty-state">Settings → Vehicles mein pehle kuch add karein</li>`;
     return;
@@ -262,53 +525,188 @@ function renderVehicles() {
     li.className = 'vehicle-item' + (state.trip.vehicles[v] ? ' active' : '');
     li.dataset.v = v;
 
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.id = 'veh-' + v.replace(/\s+/g, '');
-    cb.checked = !!state.trip.vehicles[v];
+    const label = document.createElement('div');
+    label.className = 'veh-label';
+    label.textContent = v;
 
-    const lb = document.createElement('label');
-    lb.htmlFor = cb.id;
-    lb.textContent = v;
+    // Stepper: [−] value [+]
+    const stepper = document.createElement('div');
+    stepper.className = 'stepper';
 
-    const num = document.createElement('input');
-    num.type = 'number';
-    num.min = 0;
-    num.value = state.trip.vehicles[v] || 0;
-    num.placeholder = 'Qty';
+    const btnMinus = document.createElement('button');
+    btnMinus.type = 'button';
+    btnMinus.textContent = '−';
+    btnMinus.setAttribute('aria-label', `Decrease ${v}`);
+
+    const valEl = document.createElement('div');
+    valEl.className = 'step-value';
+    valEl.textContent = state.trip.vehicles[v] || 0;
+
+    const btnPlus = document.createElement('button');
+    btnPlus.type = 'button';
+    btnPlus.textContent = '+';
+    btnPlus.setAttribute('aria-label', `Increase ${v}`);
+
+    const updateBtnState = () => {
+      const q = state.trip.vehicles[v] || 0;
+      btnMinus.disabled = q <= 0;
+      valEl.textContent = q;
+    };
 
     const syncVehicle = qty => {
+      qty = Math.max(0, qty | 0);
       if (qty > 0) {
         state.trip.vehicles[v] = qty;
-        cb.checked = true;
         li.classList.add('active');
       } else {
         delete state.trip.vehicles[v];
-        cb.checked = false;
         li.classList.remove('active');
       }
-      reflowBoyVehicles();   // refresh dropdowns in boys list
+      updateBtnState();
+      renderExpenses();          // refresh per-vehicle expenses
+      renderBoysList();          // refresh dropdowns
+      updateSummary();
     };
 
-    num.oninput = () => syncVehicle(Math.max(0, +num.value || 0));
-    cb.onchange = () => {
-      if (cb.checked) {
-        const q = Math.max(1, +num.value || 1);
-        num.value = q;
-        syncVehicle(q);
-      } else {
-        num.value = 0;
-        syncVehicle(0);
-      }
+    btnMinus.onclick = () => {
+      const q = state.trip.vehicles[v] || 0;
+      if (q > 0) syncVehicle(q - 1);
+    };
+    btnPlus.onclick = () => {
+      const q = state.trip.vehicles[v] || 0;
+      syncVehicle(q + 1);
     };
 
-    li.append(cb, lb, num);
+    updateBtnState();
+
+    stepper.append(btnMinus, valEl, btnPlus);
+    li.append(label, stepper);
     ul.append(li);
   });
 }
 
 /* =====================================================
-   BATCH TABS — All + dynamic batches
+   EXPENSES — per-vehicle dynamic
+   ===================================================== */
+function renderExpenses() {
+  const ul = $('#expenses-list');
+  if (!ul) return;
+  ul.innerHTML = '';
+
+  const instances = getVehicleInstances();
+
+  if (!instances.length) {
+    ul.innerHTML = `<li class="empty-state">Pehle "Date & Vehicles" tab mein vehicles arrange karein</li>`;
+    updateExpenseTotals();
+    return;
+  }
+
+  // Ensure expense records exist for each instance
+  instances.forEach(v => {
+    if (!state.trip.expenses[v]) {
+      state.trip.expenses[v] = { toll: 0, driver: 0, tollFree: false, driverFree: false };
+    }
+  });
+
+  // Remove expenses for vehicles that no longer exist
+  Object.keys(state.trip.expenses).forEach(k => {
+    if (!instances.includes(k)) delete state.trip.expenses[k];
+  });
+
+  instances.forEach(v => {
+    const rec = state.trip.expenses[v];
+
+    const li = document.createElement('li');
+    li.className = 'expense-row';
+
+    const vEl = document.createElement('div');
+    vEl.className = 'exp-veh';
+    vEl.textContent = v;
+
+    // Toll input
+    const tollIn = document.createElement('input');
+    tollIn.type = 'number';
+    tollIn.min = 0;
+    tollIn.placeholder = 'Toll';
+    tollIn.value = rec.toll || 0;
+    tollIn.disabled = !!rec.tollFree;
+    tollIn.oninput = () => {
+      rec.toll = +tollIn.value || 0;
+      updateExpenseTotals();
+      updateSummary();
+    };
+
+    // Driver input
+    const driverIn = document.createElement('input');
+    driverIn.type = 'number';
+    driverIn.min = 0;
+    driverIn.placeholder = 'Driver';
+    driverIn.value = rec.driver || 0;
+    driverIn.disabled = !!rec.driverFree;
+    driverIn.oninput = () => {
+      rec.driver = +driverIn.value || 0;
+      updateExpenseTotals();
+      updateSummary();
+    };
+
+    // Free toggle — marks both Toll & Driver as FREE
+    const freeLabel = document.createElement('label');
+    freeLabel.className = 'free-toggle' + (rec.tollFree && rec.driverFree ? ' on' : '');
+
+    const freeCb = document.createElement('input');
+    freeCb.type = 'checkbox';
+    freeCb.checked = !!(rec.tollFree && rec.driverFree);
+
+    const freeText = document.createElement('span');
+    freeText.textContent = 'Free';
+
+    freeCb.onchange = () => {
+      const on = freeCb.checked;
+      rec.tollFree = on;
+      rec.driverFree = on;
+      if (on) { rec.toll = 0; rec.driver = 0; }
+      freeLabel.classList.toggle('on', on);
+      tollIn.disabled = on;
+      driverIn.disabled = on;
+      tollIn.value = on ? 0 : rec.toll;
+      driverIn.value = on ? 0 : rec.driver;
+      updateExpenseTotals();
+      updateSummary();
+    };
+
+    freeLabel.append(freeCb, freeText);
+    li.append(vEl, tollIn, driverIn, freeLabel);
+    ul.append(li);
+  });
+
+  updateExpenseTotals();
+}
+
+function updateExpenseTotals() {
+  let toll = 0, driver = 0;
+  Object.values(state.trip.expenses).forEach(r => {
+    if (!r.tollFree)   toll   += +r.toll   || 0;
+    if (!r.driverFree) driver += +r.driver || 0;
+  });
+
+  // Mirror to top-level totals (for summary)
+  state.trip.toll   = toll;
+  state.trip.driver = driver;
+
+  const t1 = $('#exp-toll-total');
+  const t2 = $('#exp-driver-total');
+  if (t1) t1.textContent = fmt(toll);
+  if (t2) t2.textContent = fmt(driver);
+
+  // Sync to summary inputs
+  const tEl = $('#toll-cost');
+  const dEl = $('#driver-cost');
+  if (tEl) tEl.value = toll;
+  if (dEl) dEl.value = driver;
+}
+
+/* =====================================================
+   BATCH TABS
    ===================================================== */
 function renderBatchTabs() {
   const nav = $('#batch-tabs');
@@ -332,7 +730,7 @@ function renderBatchTabs() {
 }
 
 /* =====================================================
-   BOYS LIST — render per current batch filter
+   BOYS LIST
    ===================================================== */
 function renderBoysList() {
   const ul = $('#boys-list');
@@ -351,10 +749,8 @@ function renderBoysList() {
     return;
   }
 
-  // Sync trip.boys: ensure every master boy has an entry
   syncTripBoys();
 
-  // Filter by active batch
   const filtered = state.trip.boys.filter(b =>
     state.activeBatch === 'all' || String(b.batch) === String(state.activeBatch)
   );
@@ -373,13 +769,10 @@ function renderBoysList() {
       (boy.selected ? ' selected' : '');
     li.dataset.idx = globalIdx;
 
-    /* # */
     const num = document.createElement('strong');
     num.className = 'row-num';
     num.textContent = '#';
-    num.title = 'Serial';
 
-    /* Checkbox (selection for bulk) */
     const sel = document.createElement('input');
     sel.type = 'checkbox';
     sel.className = 'row-sel';
@@ -390,17 +783,14 @@ function renderBoysList() {
       updateBulkCount();
     };
 
-    /* Name (read-only from master) */
     const name = document.createElement('strong');
     name.className = 'row-name';
     name.textContent = boy.name;
 
-    /* Batch badge */
     const batch = document.createElement('em');
     batch.className = 'row-batch';
     batch.textContent = boy.batch;
 
-    /* Vehicle dropdown */
     const vehSel = document.createElement('select');
     const currentVeh = boy.vehicle || vehicles[0];
     if (!vehicles.includes(currentVeh)) boy.vehicle = vehicles[0];
@@ -412,7 +802,6 @@ function renderBoysList() {
     });
     vehSel.onchange = () => { boy.vehicle = vehSel.value; };
 
-    /* Fare input */
     const fareIn = document.createElement('input');
     fareIn.type = 'number';
     fareIn.min = 0;
@@ -420,7 +809,6 @@ function renderBoysList() {
     fareIn.value = boy.fare || 0;
     fareIn.oninput = () => { boy.fare = +fareIn.value || 0; updateSummary(); };
 
-    /* Absent toggle (small) */
     const rm = document.createElement('button');
     rm.type = 'button';
     rm.className = 'remove-btn';
@@ -442,19 +830,18 @@ function renderBoysList() {
   updateBulkCount();
 }
 
-/* Sync trip.boys against master list */
 function syncTripBoys() {
   const vehicles = getVehicleInstances();
-  const masterIds = new Set(state.boysMaster.map(b => `${b.name}|${b.batch}`));
+  const masterKeys = new Set(state.boysMaster.map(b => `${b.name}|${b.batch}`));
 
-  // Remove entries whose master was deleted
-  state.trip.boys = state.trip.boys.filter(b => masterIds.has(`${b.name}|${b.batch}`));
+  // Drop entries whose master was deleted
+  state.trip.boys = state.trip.boys.filter(b => masterKeys.has(`${b.name}|${b.batch}`));
 
   // Add missing entries
-  const existingKeys = new Set(state.trip.boys.map(b => `${b.name}|${b.batch}`));
+  const existing = new Set(state.trip.boys.map(b => `${b.name}|${b.batch}`));
   state.boysMaster.forEach(m => {
     const key = `${m.name}|${m.batch}`;
-    if (!existingKeys.has(key)) {
+    if (!existing.has(key)) {
       state.trip.boys.push({
         name: m.name,
         batch: m.batch,
@@ -466,15 +853,10 @@ function syncTripBoys() {
     }
   });
 
-  // Fix any vehicle references that no longer exist
+  // Fix stale vehicle refs
   state.trip.boys.forEach(b => {
     if (!vehicles.includes(b.vehicle)) b.vehicle = vehicles[0] || '';
   });
-}
-
-/* Refresh vehicle dropdowns without losing state */
-function reflowBoyVehicles() {
-  renderBoysList();
 }
 
 /* =====================================================
@@ -518,7 +900,8 @@ function bulkSetAbsent(absent) {
 
 function updateBulkCount() {
   const n = state.trip.boys.filter(b => b.selected).length;
-  $('#sel-count').textContent = `${n} selected`;
+  const el = $('#sel-count');
+  if (el) el.textContent = `${n} selected`;
 }
 
 /* =====================================================
@@ -530,8 +913,13 @@ function updateSummary() {
 
   const boysTotal = present.reduce((s, b) => s + (+b.fare || 0), 0);
   const girls     = +($('#girls-total')?.value) || state.trip.girlsTotal || 0;
-  const toll      = +($('#toll-cost')?.value)  || state.trip.toll || 0;
-  const driver    = +($('#driver-cost')?.value)|| state.trip.driver || 0;
+
+  // Compute toll/driver from per-vehicle expenses
+  let toll = 0, driver = 0;
+  Object.values(state.trip.expenses || {}).forEach(r => {
+    if (!r.tollFree)   toll   += +r.toll   || 0;
+    if (!r.driverFree) driver += +r.driver || 0;
+  });
 
   state.trip.girlsTotal = girls;
   state.trip.toll       = toll;
@@ -540,22 +928,25 @@ function updateSummary() {
   const totalFare = boysTotal + girls;
   const net       = totalFare - toll - driver;
 
-  $('#sum-present').textContent = present.length;
-  $('#sum-absent').textContent  = absent.length;
-  $('#sum-boys').textContent    = fmt(boysTotal);
-  $('#sum-girls').textContent   = fmt(girls);
-  $('#sum-total').textContent   = fmt(totalFare);
-  $('#sum-toll').textContent    = fmt(toll);
-  $('#sum-driver').textContent  = fmt(driver);
-  $('#sum-net').textContent     = fmt(net);
+  const setTxt = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+  setTxt('#sum-present', present.length);
+  setTxt('#sum-absent',  absent.length);
+  setTxt('#sum-boys',    fmt(boysTotal));
+  setTxt('#sum-girls',   fmt(girls));
+  setTxt('#sum-total',   fmt(totalFare));
+  setTxt('#sum-toll',    fmt(toll));
+  setTxt('#sum-driver',  fmt(driver));
+  setTxt('#sum-net',     fmt(net));
 
   const netRow = $('#net-row');
-  netRow.classList.toggle('positive', net >= 0);
-  netRow.classList.toggle('negative', net < 0);
+  if (netRow) {
+    netRow.classList.toggle('positive', net >= 0);
+    netRow.classList.toggle('negative', net < 0);
+  }
 }
 
 /* =====================================================
-   SAVE TRIP
+   SAVE TRIP (upsert today)
    ===================================================== */
 async function saveTrip() {
   if (!state.user) return toast('Login required');
@@ -565,14 +956,18 @@ async function saveTrip() {
     return toast('Kam az kam ek vehicle arrange karein');
   }
 
-  // Ensure boys reflect latest master
   syncTripBoys();
 
   const present = state.trip.boys.filter(b => !b.absent);
   const boysTotal = present.reduce((s, b) => s + (+b.fare || 0), 0);
   const girls     = state.trip.girlsTotal || 0;
-  const toll      = state.trip.toll || 0;
-  const driver    = state.trip.driver || 0;
+
+  let toll = 0, driver = 0;
+  Object.values(state.trip.expenses || {}).forEach(r => {
+    if (!r.tollFree)   toll   += +r.toll   || 0;
+    if (!r.driverFree) driver += +r.driver || 0;
+  });
+
   const totalFare = boysTotal + girls;
   const net       = totalFare - toll - driver;
 
@@ -591,37 +986,56 @@ async function saveTrip() {
     totalFare,
     toll,
     driver,
+    expenses: JSON.parse(JSON.stringify(state.trip.expenses || {})),
     net
   };
 
   try {
-    await saveTripSafe(state.user.uid, payload);
-    toast('✅ Trip saved!');
+    const today = todayISO();
+    let result;
 
-    // Refresh local history list
+    if (state.trip.date === today) {
+      // UPSERT for today
+      result = await saveTodayTripSafe(state.user.uid, today, payload);
+      state.loadedTodayId = result.id;
+    } else {
+      // Past/future date → regular add
+      const id = await saveTripSafe(state.user.uid, payload);
+      result = { id, updated: false };
+    }
+
+    toast(result.updated ? '✅ Today\'s entry updated!' : '✅ Trip saved!');
+    updateSaveHint();
+
     state.trips = await loadTripsSafe(state.user.uid);
     renderHistory();
 
-    resetTripForm();
+    // Don't reset form for today's entry (so user can keep editing)
+    if (state.trip.date !== today) resetTripForm();
   } catch (err) {
     toast('❌ Save fail: ' + (err.message || err.code));
   }
 }
 
 function resetTripForm() {
-  state.trip.vehicles  = {};
-  state.trip.boys      = [];
+  state.trip.vehicles   = {};
+  state.trip.boys       = [];
   state.trip.girlsTotal = 0;
-  state.trip.toll      = 0;
-  state.trip.driver    = 0;
+  state.trip.toll       = 0;
+  state.trip.driver     = 0;
+  state.trip.expenses   = {};
+  state.loadedTodayId   = null;
 
-  $('#girls-total').value  = 0;
-  $('#toll-cost').value    = 0;
-  $('#driver-cost').value  = 0;
+  const setV = (id, v) => { const el = $(id); if (el) el.value = v; };
+  setV('#girls-total', 0);
+  setV('#toll-cost', 0);
+  setV('#driver-cost', 0);
 
   renderVehicles();
   renderBoysList();
+  renderExpenses();
   updateSummary();
+  updateSaveHint();
 }
 
 /* =====================================================
@@ -629,28 +1043,59 @@ function resetTripForm() {
    ===================================================== */
 function renderHistory(filter = '') {
   const ul = $('#history-list');
+  if (!ul) return;
   ul.innerHTML = '';
+
+  const bulkBar = $('#history-bulk-bar');
+  if (bulkBar) bulkBar.hidden = state.trips.length === 0;
 
   const list = state.trips.filter(t =>
     !filter || String(t.date || '').includes(filter)
   );
 
   if (!list.length) {
-    ul.innerHTML = `<li class="history-item" style="cursor:default;text-align:center;color:var(--text-dim)">
+    ul.innerHTML = `<li class="history-item no-select" style="cursor:default;text-align:center;color:var(--text-dim)">
       Koi trip nahi mili.
     </li>`;
+    updateHistoryCount();
     return;
   }
 
+  const today = todayISO();
+
   list.forEach(t => {
     const li = document.createElement('li');
-    li.className = 'history-item';
-    li.onclick = () => showTripDetails(t);
+    li.className = 'history-item' + (state.historySelected.has(t.id) ? ' selected' : '');
+
+    // Checkbox
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'history-check';
+    cb.checked = state.historySelected.has(t.id);
+    cb.onclick = e => e.stopPropagation();
+    cb.onchange = () => {
+      if (cb.checked) state.historySelected.add(t.id);
+      else state.historySelected.delete(t.id);
+      li.classList.toggle('selected', cb.checked);
+      updateHistoryCount();
+    };
+
+    // Body
+    const body = document.createElement('div');
+    body.className = 'hist-body';
+    body.style.cursor = 'pointer';
+    body.onclick = () => showTripDetails(t);
 
     const header = document.createElement('header');
 
     const time = document.createElement('time');
     time.textContent = t.date || '—';
+    if (t.date === today) {
+      const tag = document.createElement('span');
+      tag.className = 'today-tag';
+      tag.textContent = 'TODAY';
+      time.append(' ', tag);
+    }
 
     const badge = document.createElement('strong');
     badge.className = 'net-badge ' + (t.net >= 0 ? 'pos' : 'neg');
@@ -664,9 +1109,17 @@ function renderHistory(filter = '') {
     const absentCount  = (t.boys || []).filter(b => b.absent).length;
     p.textContent = `${vList || 'No vehicles'} • Present: ${presentCount} • Absent: ${absentCount} • Fare: ${fmt(t.totalFare)} • Toll: ${fmt(t.toll)} • Driver: ${fmt(t.driver)}`;
 
-    li.append(header, p);
+    body.append(header, p);
+    li.append(cb, body);
     ul.append(li);
   });
+
+  updateHistoryCount();
+}
+
+function updateHistoryCount() {
+  const el = $('#history-sel-count');
+  if (el) el.textContent = `${state.historySelected.size} selected`;
 }
 
 /* =====================================================
@@ -678,7 +1131,6 @@ function showTripDetails(t) {
   $('#modal-title').textContent = 'Trip — ' + (t.date || '—');
   body.innerHTML = '';
 
-  /* Vehicles */
   const vHTML = Object.entries(t.vehicles || {})
     .map(([v, c]) => `<li><em>${esc(v)}</em><strong>${c}</strong></li>`)
     .join('') || '<li><em>None</em><strong>0</strong></li>';
@@ -690,7 +1142,6 @@ function showTripDetails(t) {
     </section>
   `);
 
-  /* Boys grouped by vehicle */
   if (Array.isArray(t.boys) && t.boys.length) {
     const grouped = {};
     t.boys.forEach(b => {
@@ -699,9 +1150,7 @@ function showTripDetails(t) {
     });
 
     const gHTML = Object.entries(grouped).map(([veh, arr]) => {
-      const collected = arr
-        .filter(b => !b.absent)
-        .reduce((s, b) => s + (+b.fare || 0), 0);
+      const collected = arr.filter(b => !b.absent).reduce((s, b) => s + (+b.fare || 0), 0);
       const rows = arr.map(b => `
         <li style="padding-left:1rem;${b.absent ? 'opacity:.5;text-decoration:line-through' : ''}">
           <em>↳ ${esc(b.name)} ${b.absent ? '(Absent)' : `[Batch ${esc(b.batch)}]`}</em>
@@ -724,7 +1173,22 @@ function showTripDetails(t) {
     `);
   }
 
-  /* Girls */
+  // Expenses breakdown (per vehicle)
+  const exp = t.expenses || {};
+  if (Object.keys(exp).length) {
+    const rows = Object.entries(exp).map(([veh, r]) => {
+      const tollTxt   = r.tollFree   ? 'Free' : fmt(r.toll);
+      const driverTxt = r.driverFree ? 'Free' : fmt(r.driver);
+      return `<li><em>${esc(veh)} — Toll / Driver</em><strong>${tollTxt} / ${driverTxt}</strong></li>`;
+    }).join('');
+    body.insertAdjacentHTML('beforeend', `
+      <section class="modal-section">
+        <h3>🚐 Per-Vehicle Expenses</h3>
+        <ul>${rows}</ul>
+      </section>
+    `);
+  }
+
   body.insertAdjacentHTML('beforeend', `
     <section class="modal-section">
       <h3>👧 Girls</h3>
@@ -732,7 +1196,6 @@ function showTripDetails(t) {
     </section>
   `);
 
-  /* Financials */
   body.insertAdjacentHTML('beforeend', `
     <section class="modal-section">
       <h3>💰 Financials</h3>
@@ -784,6 +1247,7 @@ function renderVehicleSettings() {
       renderVehicleSettings();
       renderVehicles();
       renderBoysList();
+      renderExpenses();
       toast('Vehicle removed');
     };
     li.append(rm);
@@ -813,7 +1277,6 @@ function renderBatchSettings() {
     rm.textContent = '✕';
     rm.onclick = async () => {
       state.batches.splice(i, 1);
-      // If active batch was removed, reset to 'all'
       if (state.activeBatch === b) state.activeBatch = 'all';
       await saveUserConfigSafe(state.user.uid, {
         vehicles: state.vehicles,
@@ -839,7 +1302,6 @@ function renderBoysMaster() {
   ul.innerHTML = '';
   sel.innerHTML = '';
 
-  // Populate batch dropdown for the add-form
   state.batches.forEach(b => {
     const o = document.createElement('option');
     o.value = b; o.textContent = b;
@@ -857,7 +1319,7 @@ function renderBoysMaster() {
 
     const num = document.createElement('strong');
     num.className = 'row-num';
-    num.textContent = '#';
+    num.textContent = '#' + (i + 1);
 
     const nameIn = document.createElement('input');
     nameIn.type = 'text';
@@ -865,7 +1327,7 @@ function renderBoysMaster() {
     nameIn.placeholder = 'Name';
     nameIn.onblur = async () => {
       const v = nameIn.value.trim();
-      if (!v) return;
+      if (!v) { nameIn.value = boy.name; return; }
       boy.name = v;
       await persistBoysMaster();
       renderBoysList();
@@ -878,13 +1340,7 @@ function renderBoysMaster() {
       if (String(boy.batch) === String(b)) o.selected = true;
       batchSel.append(o);
     });
-    batchSel.style.padding = '.4rem';
-    batchSel.style.borderRadius = '8px';
-    batchSel.style.background = 'rgba(0,0,0,.2)';
-    batchSel.style.color = 'var(--text)';
-    batchSel.style.border = '1px solid var(--glass-bd)';
-    batchSel.style.fontFamily = 'inherit';
-    batchSel.style.fontSize = '.8rem';
+    batchSel.style.cssText = 'padding:.4rem;border-radius:8px;background:rgba(0,0,0,.2);color:var(--text);border:1px solid var(--glass-bd);font-family:inherit;font-size:.8rem';
     batchSel.onchange = async () => {
       boy.batch = batchSel.value;
       await persistBoysMaster();
@@ -933,6 +1389,7 @@ async function addVehicle(e) {
   });
   renderVehicleSettings();
   renderVehicles();
+  renderExpenses();
   renderBoysList();
   toast('✅ Vehicle added');
 }
@@ -964,7 +1421,6 @@ async function addBoyMaster(e) {
   if (!name) return toast('Name daalein');
   if (!batch) return toast('Pehle koi batch add karein');
 
-  // Duplicate check (name + batch)
   const dup = state.boysMaster.some(
     b => b.name.toLowerCase() === name.toLowerCase() && String(b.batch) === String(batch)
   );
@@ -976,6 +1432,124 @@ async function addBoyMaster(e) {
   renderBoysMaster();
   renderBoysList();
   toast('✅ Boy added');
+}
+
+/* =====================================================
+   ADMINS TAB — refresh + render + grant/revoke
+   ===================================================== */
+async function refreshAdminsTab() {
+  if (!state.isAdminUser) return;
+  const ul = $('#admins-list');
+  if (!ul) return;
+
+  ul.innerHTML = `<li class="empty-state">Loading users…</li>`;
+
+  try {
+    const [users, admins] = await Promise.all([listAllUsers(), listAdmins()]);
+    state.usersCache = users;
+    state.adminsCache = admins;
+
+    const adminUids = new Set(admins.map(a => a.uid));
+
+    if (!users.length) {
+      ul.innerHTML = `<li class="empty-state">Abhi koi user register nahi hua.</li>`;
+      return;
+    }
+
+    ul.innerHTML = '';
+    users.forEach(u => {
+      const isAdm = adminUids.has(u.uid);
+      const isSelf = u.uid === state.user.uid;
+
+      const li = document.createElement('li');
+      li.className = 'admin-row' + (isAdm ? ' is-admin' : '');
+
+      const av = document.createElement('div');
+      av.className = 'admin-avatar';
+      av.textContent = (u.email || '?')[0].toUpperCase();
+
+      const info = document.createElement('div');
+      info.className = 'admin-info';
+      const strong = document.createElement('strong');
+      strong.textContent = u.email || '(no email)';
+      const small = document.createElement('small');
+      small.textContent = isSelf ? 'You' : (isAdm ? 'Admin' : 'User');
+      info.append(strong, small);
+
+      // Action button
+      const btn = document.createElement('button');
+      btn.className = 'mini-btn ' + (isAdm ? 'red' : 'gold');
+      btn.textContent = isAdm ? 'Revoke' : 'Make Admin';
+      btn.disabled = isSelf;
+      if (isSelf) btn.title = 'Khud ko revoke nahi kar sakte';
+
+      btn.onclick = async () => {
+        try {
+          if (isAdm) {
+            if (isSelf) return toast('Khud ko revoke nahi kar sakte');
+            const ok = await confirmDialog('Revoke Admin',
+              `${u.email} ko admin se hata dein?`, 'Revoke');
+            if (!ok) return;
+            await revokeAdmin(u.uid);
+            toast('👤 Admin revoked');
+          } else {
+            await grantAdmin(u.uid, u.email, state.user.email);
+            toast('👑 Admin granted');
+          }
+          await refreshAdminsTab();
+        } catch (err) {
+          toast('❌ ' + (err.message || err));
+        }
+      };
+
+      li.append(av, info, btn);
+      ul.append(li);
+    });
+  } catch (err) {
+    ul.innerHTML = `<li class="empty-state">Load fail: ${esc(err.message)}</li>`;
+  }
+}
+
+/* =====================================================
+   PWA INSTALL PROMPT
+   ===================================================== */
+function initPWA() {
+  const promptEl = $('#pwa-install');
+  const installBtn = $('#pwa-install-btn');
+  const dismissBtn = $('#pwa-dismiss');
+  if (!promptEl) return;
+
+  // Skip if already installed / dismissed
+  if (window.matchMedia('(display-mode: standalone)').matches) return;
+  if (localStorage.getItem('ff-pwa-dismissed') === '1') return;
+
+  window.addEventListener('beforeinstallprompt', e => {
+    e.preventDefault();
+    state.pwaPrompt = e;
+    promptEl.hidden = false;
+    requestAnimationFrame(() => promptEl.classList.add('show'));
+  });
+
+  if (installBtn) installBtn.onclick = async () => {
+    if (!state.pwaPrompt) return;
+    state.pwaPrompt.prompt();
+    const { outcome } = await state.pwaPrompt.userChoice;
+    state.pwaPrompt = null;
+    promptEl.classList.remove('show');
+    setTimeout(() => { promptEl.hidden = true; }, 400);
+    if (outcome === 'accepted') toast('📲 Installed!');
+  };
+
+  if (dismissBtn) dismissBtn.onclick = () => {
+    localStorage.setItem('ff-pwa-dismissed', '1');
+    promptEl.classList.remove('show');
+    setTimeout(() => { promptEl.hidden = true; }, 400);
+  };
+
+  window.addEventListener('appinstalled', () => {
+    promptEl.classList.remove('show');
+    setTimeout(() => { promptEl.hidden = true; }, 400);
+  });
 }
 
 /* =====================================================
@@ -1013,6 +1587,8 @@ document.head.append(rippleStyle);
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   initAuth();
+  initPWA();
+
   const d = $('#trip-date');
-  if (d) d.value = new Date().toISOString().slice(0, 10);
+  if (d) d.value = todayISO();
 });

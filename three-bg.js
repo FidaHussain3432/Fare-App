@@ -1,13 +1,17 @@
 /* =====================================================
-   THREE.JS BACKGROUND — IMMERSIVE GOLDEN BOKEH
-   • Round, smooth, blurred particles (custom shader)
-   • Soft glowing orbs (bokeh aesthetic)
-   • Mouse parallax + gentle drift
-   • Golden palette matching brand
-   • Mobile-optimized (reduced count, capped DPR)
-   • Cloudflare Pages compatible (CDN loaded)
-   • Respects prefers-reduced-motion
+   THREE.JS BACKGROUND — FUTURISTIC ROAD + REALISTIC BUS
+   =====================================================
+   Option C — Hybrid:
+   • Procedural detailed bus (real-world-like, metallic)
+   • Futuristic golden highway
+   • Night city skyline + stars + shooting stars
+   • Headlight beam, taillights, glowing windows
+   • Rotating wheels + suspension bounce
+   • Roadside light poles + speed streaks
+   • Chase camera with parallax + gyro
+   • Modular: replace createBus() with GLTF later
    ===================================================== */
+
 (function initThree() {
   /* ---------- GUARDS ---------- */
   if (typeof THREE === 'undefined') return;
@@ -16,189 +20,718 @@
   const canvas = document.getElementById('bg-canvas');
   if (!canvas) return;
 
+  /* =====================================================
+     ⚙️ CONFIG — EASY TO CHANGE
+     ===================================================== */
+  const CONFIG = {
+    busType: 'single-decker',       // 'single-decker' | 'double-decker'
+    cameraMode: 'chase',            // 'chase' | 'side' | 'cinematic'
+    mood: 'night-neon',             // 'night-neon' | 'sunset' | 'rainy'
+    roadType: 'highway-grid',       // 'highway-grid' | 'city' | 'elevated'
+
+    // Colors (hex)
+    goldPrimary:   0xf6d365,
+    goldDeep:      0xd4a017,
+    goldWarm:      0xffb347,
+    roadBase:      0x0a0a12,
+    skyTop:        0x05060f,
+    skyBottom:     0x1a1228,
+    fogColor:      0x1a1228,
+
+    // Performance
+    pixelRatioMax: 2,               // mobile: 1.5 auto
+    enableShadows: false,           // mobile off
+  };
+
   /* ---------- RENDERER ---------- */
   const isMobile = window.innerWidth < 768;
   const renderer = new THREE.WebGLRenderer({
     canvas,
     alpha: true,
-    antialias: true,
-    powerPreference: 'low-power'
+    antialias: !isMobile,
+    powerPreference: 'high-performance'
   });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, isMobile ? 1.75 : 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, isMobile ? 1.5 : CONFIG.pixelRatioMax));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setClearColor(0x000000, 0);
 
+  if (CONFIG.enableShadows && !isMobile) {
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  }
+
   const scene  = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
-  camera.position.z = 24;
+  scene.fog = new THREE.FogExp2(CONFIG.fogColor, 0.014);
+
+  const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.1, 400);
+  // Chase camera initial position (behind + above bus)
+  camera.position.set(0, 4.5, 14);
 
   /* =====================================================
-     SOFT ROUND PARTICLE — Custom Shader Material
-     Makes circular, blurred, bokeh-like glowing orbs
+     LIGHTING
      ===================================================== */
-  const vertShader = `
-    attribute float aSize;
-    attribute float aAlpha;
-    attribute vec3  aColor;
-    varying float vAlpha;
-    varying vec3  vColor;
-    void main() {
-      vAlpha = aAlpha;
-      vColor = aColor;
-      vec4 mv = modelViewMatrix * vec4(position, 1.0);
-      gl_PointSize = aSize * (300.0 / -mv.z);
-      gl_Position = projectionMatrix * mv;
-    }
-  `;
+  const ambient = new THREE.AmbientLight(0x8090b0, 0.55);
+  scene.add(ambient);
 
-  const fragShader = `
-    varying float vAlpha;
-    varying vec3  vColor;
-    void main() {
-      // gl_PointCoord is 0..1 across the point sprite
-      vec2 uv = gl_PointCoord - vec2(0.5);
-      float d = length(uv);
-      // soft round falloff → smooth blurred edge
-      float smooth_ = smoothstep(0.5, 0.0, d);
-      // extra inner glow (bright core)
-      float core = smoothstep(0.35, 0.0, d) * 0.6;
-      float alpha = (smooth_ + core) * vAlpha;
-      if (alpha < 0.01) discard;
-      gl_FragColor = vec4(vColor, alpha);
-    }
-  `;
+  const hemi = new THREE.HemisphereLight(CONFIG.skyTop, CONFIG.roadBase, 0.45);
+  scene.add(hemi);
 
-  const uniforms = {
-    uTime: { value: 0 }
-  };
+  // Warm golden key light (from behind-top, gives bus edges glow)
+  const keyLight = new THREE.DirectionalLight(0xffc460, 0.85);
+  keyLight.position.set(-8, 12, -6);
+  scene.add(keyLight);
+
+  // Cool fill light (from front, subtle)
+  const fillLight = new THREE.DirectionalLight(0x6a90d0, 0.35);
+  fillLight.position.set(6, 6, 10);
+  scene.add(fillLight);
 
   /* =====================================================
-     PARTICLE COUNT — mobile-optimized
+     SKY — Gradient dome
      ===================================================== */
-  const COUNT = isMobile ? 180 : 340;
+  const skyGeo = new THREE.SphereGeometry(200, 32, 16);
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    uniforms: {
+      uTop:    { value: new THREE.Color(CONFIG.skyTop) },
+      uBottom: { value: new THREE.Color(CONFIG.skyBottom) }
+    },
+    vertexShader: `
+      varying vec3 vPos;
+      void main() {
+        vPos = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uTop;
+      uniform vec3 uBottom;
+      varying vec3 vPos;
+      void main() {
+        float h = normalize(vPos).y;
+        float t = clamp(h * 0.5 + 0.5, 0.0, 1.0);
+        vec3 col = mix(uBottom, uTop, pow(t, 0.85));
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `
+  });
+  scene.add(new THREE.Mesh(skyGeo, skyMat));
 
-  /* ---------- GEOMETRY BUFFERS ---------- */
-  const positions  = new Float32Array(COUNT * 3);
-  const sizes      = new Float32Array(COUNT);
-  const alphas     = new Float32Array(COUNT);
-  const colors     = new Float32Array(COUNT * 3);
-  const baseSpeeds = new Float32Array(COUNT);
-  const phases     = new Float32Array(COUNT);
-  const wobbles    = new Float32Array(COUNT);
-
-  /* ---------- GOLDEN PALETTE (RGB 0-1) ---------- */
-  const PALETTE = [
-    [0.964, 0.827, 0.396], // #f6d365 — light gold
-    [0.831, 0.627, 0.090], // #d4a017 — deep gold
-    [1.000, 0.702, 0.278], // #ffb347 — amber
-    [1.000, 0.882, 0.580], // #ffe194 — pale gold
-    [0.984, 0.749, 0.141]  // #fbbf24 — warm gold
-  ];
-
-  for (let i = 0; i < COUNT; i++) {
-    // Position spread wider than camera view for depth
-    positions[i * 3 + 0] = (Math.random() - 0.5) * 70;
-    positions[i * 3 + 1] = (Math.random() - 0.5) * 70;
-    positions[i * 3 + 2] = (Math.random() - 0.5) * 45;
-
-    // Size: mostly small with occasional large bokeh
-    const sizeBias = Math.pow(Math.random(), 2.2);      // skew small
-    sizes[i] = 6 + sizeBias * 42;                        // 6 → 48
-
-    // Alpha: larger ones slightly more transparent (bokeh depth)
-    alphas[i] = 0.25 + Math.random() * 0.55;
-
-    // Color from palette
-    const c = PALETTE[Math.floor(Math.random() * PALETTE.length)];
-    colors[i * 3 + 0] = c[0];
-    colors[i * 3 + 1] = c[1];
-    colors[i * 3 + 2] = c[2];
-
-    // Motion
-    baseSpeeds[i] = 0.008 + Math.random() * 0.022;
-    phases[i]     = Math.random() * Math.PI * 2;
-    wobbles[i]    = 0.4 + Math.random() * 1.2;
+  /* =====================================================
+     STARS — twinkling point field
+     ===================================================== */
+  const STAR_COUNT = isMobile ? 220 : 450;
+  const starPos = new Float32Array(STAR_COUNT * 3);
+  const starPhase = new Float32Array(STAR_COUNT);
+  const starSizeAttr = new Float32Array(STAR_COUNT);
+  for (let i = 0; i < STAR_COUNT; i++) {
+    const r = 120 + Math.random() * 60;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.random() * Math.PI * 0.5; // upper hemisphere
+    starPos[i * 3]     = r * Math.sin(phi) * Math.cos(theta);
+    starPos[i * 3 + 1] = r * Math.cos(phi);
+    starPos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+    starPhase[i] = Math.random() * Math.PI * 2;
+    starSizeAttr[i] = 0.8 + Math.random() * 2.2;
   }
+  const starGeo = new THREE.BufferGeometry();
+  starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+  starGeo.setAttribute('aSize',  new THREE.BufferAttribute(starSizeAttr, 1));
+  starGeo.setAttribute('aPhase', new THREE.BufferAttribute(starPhase, 1));
 
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geometry.setAttribute('aSize',    new THREE.BufferAttribute(sizes, 1));
-  geometry.setAttribute('aAlpha',   new THREE.BufferAttribute(alphas, 1));
-  geometry.setAttribute('aColor',   new THREE.BufferAttribute(colors, 3));
-
-  const material = new THREE.ShaderMaterial({
-    uniforms,
-    vertexShader: vertShader,
-    fragmentShader: fragShader,
+  const starMat = new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 }, uColor: { value: new THREE.Color(0xffe6a8) } },
     transparent: true,
     depthWrite: false,
-    blending: THREE.AdditiveBlending
+    blending: THREE.AdditiveBlending,
+    vertexShader: `
+      attribute float aSize;
+      attribute float aPhase;
+      uniform float uTime;
+      varying float vAlpha;
+      void main() {
+        float tw = 0.55 + 0.45 * sin(uTime * 2.2 + aPhase);
+        vAlpha = tw;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = aSize * (300.0 / -mv.z);
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      varying float vAlpha;
+      void main() {
+        vec2 uv = gl_PointCoord - vec2(0.5);
+        float d = length(uv);
+        float a = smoothstep(0.5, 0.0, d) * vAlpha;
+        if (a < 0.02) discard;
+        gl_FragColor = vec4(uColor, a);
+      }
+    `
   });
-
-  const particles = new THREE.Points(geometry, material);
-  scene.add(particles);
+  scene.add(new THREE.Points(starGeo, starMat));
 
   /* =====================================================
-     SECOND LAYER — DEEPER, SLOWER, DIMMER PARTICLES
-     Adds parallax depth
+     SHOOTING STARS — recycled pool
      ===================================================== */
-  const COUNT_DEEP = isMobile ? 80 : 140;
-  const deepPos     = new Float32Array(COUNT_DEEP * 3);
-  const deepSizes   = new Float32Array(COUNT_DEEP);
-  const deepAlphas  = new Float32Array(COUNT_DEEP);
-  const deepColors  = new Float32Array(COUNT_DEEP * 3);
-  const deepSpeeds  = new Float32Array(COUNT_DEEP);
+  const shootingStars = [];
+  const MAX_SHOOTING = isMobile ? 1 : 2;
+  const starLineMat = () => new THREE.LineBasicMaterial({
+    color: 0xffe194, transparent: true, opacity: 0.95,
+    blending: THREE.AdditiveBlending, depthWrite: false
+  });
+  function spawnShootingStar() {
+    if (shootingStars.length >= MAX_SHOOTING) return;
+    const len = 8 + Math.random() * 8;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([
+      0, 0, 0, -len, -len * 0.5, 0
+    ], 3));
+    const mat = starLineMat();
+    const line = new THREE.Line(geo, mat);
+    line.position.set(
+      (Math.random() - 0.5) * 120,
+      40 + Math.random() * 30,
+      -60 - Math.random() * 40
+    );
+    scene.add(line);
+    shootingStars.push({
+      line, mat, life: 0,
+      maxLife: 1.2 + Math.random() * 0.8,
+      vx: 40 + Math.random() * 30,
+      vy: -(20 + Math.random() * 15)
+    });
+  }
+  let nextShoot = performance.now() + 4000 + Math.random() * 6000;
 
-  for (let i = 0; i < COUNT_DEEP; i++) {
-    deepPos[i * 3 + 0] = (Math.random() - 0.5) * 90;
-    deepPos[i * 3 + 1] = (Math.random() - 0.5) * 90;
-    deepPos[i * 3 + 2] = -20 - Math.random() * 35;     // behind
+  /* =====================================================
+     ROAD — Futuristic golden highway
+     ===================================================== */
+  const roadGroup = new THREE.Group();
+  scene.add(roadGroup);
 
-    deepSizes[i]  = 10 + Math.random() * 26;
-    deepAlphas[i] = 0.10 + Math.random() * 0.18;
+  const ROAD_WIDTH = 14;
+  const ROAD_LENGTH = 400;
+  const ROAD_SEGMENTS = isMobile ? 60 : 100;
 
-    const c = PALETTE[Math.floor(Math.random() * PALETTE.length)];
-    deepColors[i * 3 + 0] = c[0] * 0.85;
-    deepColors[i * 3 + 1] = c[1] * 0.85;
-    deepColors[i * 3 + 2] = c[2] * 0.85;
+  // Asphalt base
+  const roadGeo = new THREE.PlaneGeometry(ROAD_WIDTH, ROAD_LENGTH, 1, 1);
+  const roadMat = new THREE.MeshStandardMaterial({
+    color: CONFIG.roadBase,
+    roughness: 0.85,
+    metalness: 0.15
+  });
+  const road = new THREE.Mesh(roadGeo, roadMat);
+  road.rotation.x = -Math.PI / 2;
+  road.position.z = -ROAD_LENGTH / 2 + 20;
+  roadGroup.add(road);
 
-    deepSpeeds[i] = 0.004 + Math.random() * 0.010;
+  // Golden grid overlay (scrolling)
+  const gridCanvas = document.createElement('canvas');
+  gridCanvas.width = 128;
+  gridCanvas.height = 128;
+  const gctx = gridCanvas.getContext('2d');
+  gctx.fillStyle = 'rgba(0,0,0,0)';
+  gctx.fillRect(0, 0, 128, 128);
+  gctx.strokeStyle = 'rgba(246,211,101,0.55)';
+  gctx.lineWidth = 2;
+  gctx.strokeRect(0, 0, 128, 128);
+  gctx.beginPath();
+  gctx.moveTo(64, 0); gctx.lineTo(64, 128);
+  gctx.moveTo(0, 64); gctx.lineTo(128, 64);
+  gctx.stroke();
+  const gridTex = new THREE.CanvasTexture(gridCanvas);
+  gridTex.wrapS = gridTex.wrapT = THREE.RepeatWrapping;
+  gridTex.repeat.set(6, 80);
+  const gridPlaneGeo = new THREE.PlaneGeometry(ROAD_WIDTH, ROAD_LENGTH);
+  const gridPlaneMat = new THREE.MeshBasicMaterial({
+    map: gridTex, transparent: true, opacity: 0.35,
+    blending: THREE.AdditiveBlending, depthWrite: false
+  });
+  const gridPlane = new THREE.Mesh(gridPlaneGeo, gridPlaneMat);
+  gridPlane.rotation.x = -Math.PI / 2;
+  gridPlane.position.set(0, 0.01, -ROAD_LENGTH / 2 + 20);
+  roadGroup.add(gridPlane);
+
+  // Center dashed lane markers (glowing)
+  const dashMat = new THREE.MeshBasicMaterial({
+    color: CONFIG.goldPrimary,
+    transparent: true,
+    opacity: 0.85,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+  });
+  const dashGeo = new THREE.PlaneGeometry(0.22, 1.8);
+  const dashes = [];
+  for (let z = 20; z > -ROAD_LENGTH + 20; z -= 4) {
+    const d = new THREE.Mesh(dashGeo, dashMat);
+    d.rotation.x = -Math.PI / 2;
+    d.position.set(0, 0.02, z);
+    roadGroup.add(d);
+    dashes.push(d);
   }
 
-  const deepGeo = new THREE.BufferGeometry();
-  deepGeo.setAttribute('position', new THREE.BufferAttribute(deepPos, 3));
-  deepGeo.setAttribute('aSize',    new THREE.BufferAttribute(deepSizes, 1));
-  deepGeo.setAttribute('aAlpha',   new THREE.BufferAttribute(deepAlphas, 1));
-  deepGeo.setAttribute('aColor',   new THREE.BufferAttribute(deepColors, 3));
-
-  const deepMaterial = new THREE.ShaderMaterial({
-    uniforms,
-    vertexShader: vertShader,
-    fragmentShader: fragShader,
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending
+  // Edge lines (solid glow)
+  const edgeMat = new THREE.MeshBasicMaterial({
+    color: CONFIG.goldWarm, transparent: true, opacity: 0.55,
+    blending: THREE.AdditiveBlending, depthWrite: false
+  });
+  const edgeGeo = new THREE.PlaneGeometry(0.15, ROAD_LENGTH);
+  [-1, 1].forEach(side => {
+    const e = new THREE.Mesh(edgeGeo, edgeMat);
+    e.rotation.x = -Math.PI / 2;
+    e.position.set(side * (ROAD_WIDTH / 2 - 0.4), 0.02, -ROAD_LENGTH / 2 + 20);
+    roadGroup.add(e);
   });
 
-  const deepParticles = new THREE.Points(deepGeo, deepMaterial);
-  scene.add(deepParticles);
+  /* =====================================================
+     ROADSIDE — Light poles (repeating)
+     ===================================================== */
+  const polesGroup = new THREE.Group();
+  scene.add(polesGroup);
+
+  const polePoleGeo = new THREE.CylinderGeometry(0.06, 0.08, 6, 6);
+  const polePoleMat = new THREE.MeshStandardMaterial({
+    color: 0x1a1a22, roughness: 0.7, metalness: 0.4
+  });
+  const poleHeadGeo = new THREE.SphereGeometry(0.22, 12, 12);
+  const poleHeadMat = new THREE.MeshBasicMaterial({ color: 0xffe194 });
+
+  const poleSpacing = 18;
+  const poleCount = Math.ceil(ROAD_LENGTH / poleSpacing);
+  const polesData = [];
+
+  for (let i = 0; i < poleCount; i++) {
+    const z = 20 - i * poleSpacing;
+    [-1, 1].forEach(side => {
+      const g = new THREE.Group();
+
+      const pole = new THREE.Mesh(polePoleGeo, polePoleMat);
+      pole.position.y = 3;
+      g.add(pole);
+
+      const head = new THREE.Mesh(poleHeadGeo, poleHeadMat);
+      head.position.set(side * -0.4, 6, 0);
+      g.add(head);
+
+      // Glow sprite
+      const glowCanvas = document.createElement('canvas');
+      glowCanvas.width = glowCanvas.height = 64;
+      const gc = glowCanvas.getContext('2d');
+      const grd = gc.createRadialGradient(32, 32, 0, 32, 32, 32);
+      grd.addColorStop(0, 'rgba(255,225,148,1)');
+      grd.addColorStop(0.4, 'rgba(255,200,100,0.5)');
+      grd.addColorStop(1, 'rgba(255,200,100,0)');
+      gc.fillStyle = grd;
+      gc.fillRect(0, 0, 64, 64);
+      const glowTex = new THREE.CanvasTexture(glowCanvas);
+      const glowSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: glowTex, transparent: true, blending: THREE.AdditiveBlending,
+        depthWrite: false, opacity: 0.9
+      }));
+      glowSprite.scale.set(2.2, 2.2, 1);
+      glowSprite.position.set(side * -0.4, 6, 0);
+      g.add(glowSprite);
+
+      g.position.set(side * (ROAD_WIDTH / 2 + 0.8), 0, z);
+      polesGroup.add(g);
+      polesData.push(g);
+    });
+  }
 
   /* =====================================================
-     MOUSE / TOUCH PARALLAX
+     DISTANT CITY SKYLINE — Silhouette buildings
+     ===================================================== */
+  const cityGroup = new THREE.Group();
+  scene.add(cityGroup);
+
+  const cityBuildingGeo = new THREE.BoxGeometry(1, 1, 1);
+  const cityBuildingMat = new THREE.MeshStandardMaterial({
+    color: 0x0f0d1a, roughness: 0.95, metalness: 0.1,
+    emissive: 0x1a1030, emissiveIntensity: 0.15
+  });
+
+  const buildingCount = isMobile ? 30 : 55;
+  for (let i = 0; i < buildingCount; i++) {
+    const w = 2 + Math.random() * 5;
+    const h = 6 + Math.random() * 22;
+    const d = 2 + Math.random() * 5;
+    const b = new THREE.Mesh(cityBuildingGeo, cityBuildingMat);
+    b.scale.set(w, h, d);
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const distX = (ROAD_WIDTH / 2) + 25 + Math.random() * 60;
+    b.position.set(side * distX, h / 2 - 2, -80 - Math.random() * 140);
+    cityGroup.add(b);
+
+    // Emissive window dots (small planes on facing side)
+    const windowMat = new THREE.MeshBasicMaterial({
+      color: Math.random() < 0.7 ? 0xffd27a : 0x7ab8ff,
+      transparent: true, opacity: 0.85,
+      blending: THREE.AdditiveBlending, depthWrite: false
+    });
+    const winGeo = new THREE.PlaneGeometry(0.25, 0.35);
+    const rows = Math.floor(h / 1.8);
+    const cols = Math.floor(w / 1.1);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (Math.random() < 0.55) {
+          const wm = new THREE.Mesh(winGeo, windowMat);
+          wm.position.set(
+            b.position.x - side * (w / 2 + 0.01),
+            (r + 0.5) * 1.8 - h / 2 + b.position.y,
+            b.position.z + (c - cols / 2 + 0.5) * 1.1
+          );
+          wm.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+          cityGroup.add(wm);
+        }
+      }
+    }
+  }
+
+  /* =====================================================
+     🚌 BUS — Procedural detailed model
+     =====================================================
+     NOTE: Ye function `createBus()` — aap baad mein
+     isko replace kar sakte hain GLTF loader se:
+       new THREE.GLTFLoader().load('bus.glb', gltf => {
+         return gltf.scene;
+       });
+     ===================================================== */
+  function createBus() {
+    const bus = new THREE.Group();
+
+    /* ---------- Materials ---------- */
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: 0xe8e4d8,          // off-white body
+      roughness: 0.28,
+      metalness: 0.65
+    });
+    const accentMat = new THREE.MeshStandardMaterial({
+      color: CONFIG.goldDeep,
+      roughness: 0.35,
+      metalness: 0.85
+    });
+    const darkMat = new THREE.MeshStandardMaterial({
+      color: 0x14141a, roughness: 0.55, metalness: 0.4
+    });
+    const glassMat = new THREE.MeshPhysicalMaterial({
+      color: 0x0a1420,
+      roughness: 0.08,
+      metalness: 0.2,
+      transmission: 0.4,
+      transparent: true,
+      opacity: 0.85,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.05
+    });
+    const rubberMat = new THREE.MeshStandardMaterial({
+      color: 0x0a0a0a, roughness: 0.9, metalness: 0.1
+    });
+    const rimMat = new THREE.MeshStandardMaterial({
+      color: 0xb0b0b8, roughness: 0.25, metalness: 0.9
+    });
+    const headlightMat = new THREE.MeshBasicMaterial({ color: 0xfff3c4 });
+    const taillightMat = new THREE.MeshBasicMaterial({ color: 0xff2a2a });
+    const destBoardMat = new THREE.MeshBasicMaterial({ color: 0xffbb33 });
+
+    /* ---------- Dimensions ---------- */
+    const L = 11;      // length (z)
+    const W = 2.7;     // width (x)
+    const H = 3.1;     // height (y) — floor to roof
+    const FLOOR_Y = 0.55;   // chassis floor height above wheels
+    const totalBusY = FLOOR_Y + H / 2;
+
+    /* ---------- Main body ---------- */
+    const bodyGeo = new THREE.BoxGeometry(W, H, L);
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.position.y = FLOOR_Y + H / 2;
+    bus.add(body);
+
+    // Rounded lower skirt (accent color)
+    const skirtGeo = new THREE.BoxGeometry(W + 0.02, 0.6, L - 0.2);
+    const skirt = new THREE.Mesh(skirtGeo, accentMat);
+    skirt.position.y = FLOOR_Y + 0.15;
+    bus.add(skirt);
+
+    // Roof cap (slightly wider, dark)
+    const roofGeo = new THREE.BoxGeometry(W + 0.1, 0.18, L - 0.1);
+    const roof = new THREE.Mesh(roofGeo, darkMat);
+    roof.position.y = FLOOR_Y + H + 0.05;
+    bus.add(roof);
+
+    // Roof AC unit
+    const acGeo = new THREE.BoxGeometry(1.4, 0.35, 2.2);
+    const ac = new THREE.Mesh(acGeo, bodyMat);
+    ac.position.set(0, FLOOR_Y + H + 0.3, -1.5);
+    bus.add(ac);
+    const acTop = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.05, 2.1), darkMat);
+    acTop.position.set(0, FLOOR_Y + H + 0.5, -1.5);
+    bus.add(acTop);
+
+    /* ---------- Windows (side) ---------- */
+    const winGeo = new THREE.PlaneGeometry(1.05, 1.15);
+    const winCount = 6;
+    const winStartZ = -L / 2 + 1.2;
+    const winSpacing = (L - 2.4) / (winCount - 1);
+
+    for (let i = 0; i < winCount; i++) {
+      const z = winStartZ + i * winSpacing;
+      [-1, 1].forEach(side => {
+        const w = new THREE.Mesh(winGeo, glassMat);
+        w.position.set(side * (W / 2 + 0.01), FLOOR_Y + H * 0.62, z);
+        w.rotation.y = side * Math.PI / 2;
+        bus.add(w);
+
+        // Window frame (thin outline)
+        const frameGeo = new THREE.BoxGeometry(0.04, 1.2, 1.1);
+        const frame = new THREE.Mesh(frameGeo, darkMat);
+        frame.position.set(side * (W / 2 + 0.02), FLOOR_Y + H * 0.62, z);
+        bus.add(frame);
+      });
+    }
+
+    /* ---------- Windshield (front) ---------- */
+    const wsGeo = new THREE.PlaneGeometry(W - 0.3, 1.35);
+    const ws = new THREE.Mesh(wsGeo, glassMat);
+    ws.position.set(0, FLOOR_Y + H * 0.68, L / 2 + 0.01);
+    bus.add(ws);
+
+    // Windshield frame
+    const wsFrameGeo = new THREE.BoxGeometry(W - 0.2, 1.45, 0.05);
+    const wsFrame = new THREE.Mesh(wsFrameGeo, darkMat);
+    wsFrame.position.set(0, FLOOR_Y + H * 0.68, L / 2 + 0.005);
+    bus.add(wsFrame);
+    // cut out inner (visually window overrides)
+
+    // Rear window
+    const rwGeo = new THREE.PlaneGeometry(W - 0.5, 1.0);
+    const rw = new THREE.Mesh(rwGeo, glassMat);
+    rw.position.set(0, FLOOR_Y + H * 0.65, -L / 2 - 0.01);
+    rw.rotation.y = Math.PI;
+    bus.add(rw);
+
+    /* ---------- Front bumper + grill ---------- */
+    const bumperGeo = new THREE.BoxGeometry(W + 0.05, 0.35, 0.35);
+    const bumper = new THREE.Mesh(bumperGeo, darkMat);
+    bumper.position.set(0, FLOOR_Y + 0.15, L / 2 + 0.1);
+    bus.add(bumper);
+
+    const grillGeo = new THREE.BoxGeometry(W - 0.6, 0.55, 0.08);
+    const grill = new THREE.Mesh(grillGeo, darkMat);
+    grill.position.set(0, FLOOR_Y + 0.55, L / 2 + 0.03);
+    bus.add(grill);
+    // Chrome strips
+    for (let i = 0; i < 4; i++) {
+      const strip = new THREE.Mesh(
+        new THREE.BoxGeometry(W - 0.6, 0.03, 0.1),
+        rimMat
+      );
+      strip.position.set(0, FLOOR_Y + 0.4 + i * 0.12, L / 2 + 0.04);
+      bus.add(strip);
+    }
+
+    /* ---------- Headlights (2 large + 2 small) ---------- */
+    const headGeo = new THREE.CircleGeometry(0.22, 16);
+    [-0.85, 0.85].forEach(x => {
+      const h = new THREE.Mesh(headGeo, headlightMat);
+      h.position.set(x, FLOOR_Y + 0.55, L / 2 + 0.05);
+      bus.add(h);
+
+      // Chrome ring
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.22, 0.28, 20),
+        rimMat
+      );
+      ring.position.set(x, FLOOR_Y + 0.55, L / 2 + 0.052);
+      bus.add(ring);
+    });
+
+    /* ---------- Taillights (2 red) ---------- */
+    const tailGeo = new THREE.PlaneGeometry(0.35, 0.22);
+    [-1.05, 1.05].forEach(x => {
+      const t = new THREE.Mesh(tailGeo, taillightMat);
+      t.position.set(x, FLOOR_Y + 0.55, -L / 2 - 0.02);
+      t.rotation.y = Math.PI;
+      bus.add(t);
+
+      // Glow sprite behind
+      const glowCanvas = document.createElement('canvas');
+      glowCanvas.width = glowCanvas.height = 64;
+      const gc = glowCanvas.getContext('2d');
+      const grd = gc.createRadialGradient(32, 32, 0, 32, 32, 32);
+      grd.addColorStop(0, 'rgba(255,60,60,1)');
+      grd.addColorStop(0.4, 'rgba(255,30,30,0.45)');
+      grd.addColorStop(1, 'rgba(255,0,0,0)');
+      gc.fillStyle = grd;
+      gc.fillRect(0, 0, 64, 64);
+      const glowTex = new THREE.CanvasTexture(glowCanvas);
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: glowTex, transparent: true, blending: THREE.AdditiveBlending,
+        depthWrite: false, opacity: 0.9
+      }));
+      sprite.scale.set(1.1, 1.1, 1);
+      sprite.position.set(x, FLOOR_Y + 0.55, -L / 2 - 0.15);
+      bus.add(sprite);
+    });
+
+    /* ---------- Destination board (front top, glowing) ---------- */
+    const destGeo = new THREE.PlaneGeometry(W - 0.5, 0.4);
+    const dest = new THREE.Mesh(destGeo, destBoardMat);
+    dest.position.set(0, FLOOR_Y + H - 0.35, L / 2 + 0.02);
+    bus.add(dest);
+
+    // Simple text look — an inner darker strip to simulate letters
+    for (let i = 0; i < 6; i++) {
+      const letter = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.14, 0.14),
+        new THREE.MeshBasicMaterial({ color: 0x2a1a00 })
+      );
+      letter.position.set(-1 + i * 0.4, FLOOR_Y + H - 0.35, L / 2 + 0.025);
+      bus.add(letter);
+    }
+
+    /* ---------- Side mirrors ---------- */
+    const mirrorArmGeo = new THREE.BoxGeometry(0.05, 0.05, 0.5);
+    const mirrorHeadGeo = new THREE.BoxGeometry(0.08, 0.3, 0.18);
+    [-1, 1].forEach(side => {
+      const arm = new THREE.Mesh(mirrorArmGeo, darkMat);
+      arm.position.set(side * (W / 2 + 0.15), FLOOR_Y + H * 0.75, L / 2 - 0.3);
+      bus.add(arm);
+
+      const mh = new THREE.Mesh(mirrorHeadGeo, glassMat);
+      mh.position.set(side * (W / 2 + 0.4), FLOOR_Y + H * 0.75, L / 2 - 0.3);
+      bus.add(mh);
+    });
+
+    /* ---------- Door (front right side) ---------- */
+    const doorGeo = new THREE.PlaneGeometry(0.9, 1.9);
+    const doorMat = new THREE.MeshPhysicalMaterial({
+      color: 0x1a1a22, roughness: 0.15, metalness: 0.4,
+      transmission: 0.3, transparent: true, opacity: 0.7,
+      clearcoat: 1
+    });
+    const door = new THREE.Mesh(doorGeo, doorMat);
+    door.position.set(W / 2 + 0.01, FLOOR_Y + 1.0, L / 2 - 1.2);
+    door.rotation.y = Math.PI / 2;
+    bus.add(door);
+
+    /* ---------- Wheels ---------- */
+    const wheelRadius = 0.55;
+    const wheelThick  = 0.35;
+    const wheelGeo = new THREE.CylinderGeometry(wheelRadius, wheelRadius, wheelThick, 24);
+    const rimGeo = new THREE.CylinderGeometry(wheelRadius * 0.62, wheelRadius * 0.62, wheelThick + 0.02, 12);
+
+    const wheels = [];
+    const wheelPositions = [
+      { x:  W / 2 - 0.15, z:  L / 2 - 1.6 },   // front right
+      { x: -W / 2 + 0.15, z:  L / 2 - 1.6 },   // front left
+      { x:  W / 2 - 0.15, z: -L / 2 + 2.0 },   // rear right
+      { x: -W / 2 + 0.15, z: -L / 2 + 2.0 }    // rear left
+    ];
+
+    wheelPositions.forEach(p => {
+      const w = new THREE.Mesh(wheelGeo, rubberMat);
+      w.rotation.z = Math.PI / 2;
+      w.position.set(p.x, wheelRadius, p.z);
+      bus.add(w);
+
+      const rim = new THREE.Mesh(rimGeo, rimMat);
+      rim.rotation.z = Math.PI / 2;
+      rim.position.copy(w.position);
+      // rim slightly outside the tire
+      rim.position.x += (p.x > 0 ? 1 : -1) * 0.01;
+      bus.add(rim);
+
+      wheels.push(w);
+    });
+
+    /* ---------- Headlight BEAM (volumetric cone) ---------- */
+    // Cone in front, additive, fades with distance
+    const beamGeo = new THREE.ConeGeometry(2.6, 12, 24, 1, true);
+    const beamMat = new THREE.MeshBasicMaterial({
+      color: 0xffe194,
+      transparent: true,
+      opacity: 0.14,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+    const beam = new THREE.Mesh(beamGeo, beamMat);
+    beam.rotation.x = Math.PI / 2;
+    beam.position.set(0, FLOOR_Y + 0.5, L / 2 + 6);
+    bus.add(beam);
+
+    /* ---------- Under-glow (golden pool) ---------- */
+    const underGlowGeo = new THREE.PlaneGeometry(W + 2, L + 3);
+    const underGlowMat = new THREE.MeshBasicMaterial({
+      color: CONFIG.goldPrimary,
+      transparent: true,
+      opacity: 0.18,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+    const underGlow = new THREE.Mesh(underGlowGeo, underGlowMat);
+    underGlow.rotation.x = -Math.PI / 2;
+    underGlow.position.y = 0.02;
+    bus.add(underGlow);
+
+    /* ---------- Store refs for animation ---------- */
+    bus.userData = {
+      wheels,
+      beam,
+      underGlow,
+      baseY: 0,
+      bouncePhase: Math.random() * Math.PI * 2
+    };
+
+    return bus;
+  }
+
+  // Create bus
+  const bus = createBus();
+  bus.position.set(0, 0, 0);
+  scene.add(bus);
+
+  /* =====================================================
+     SPEED STREAKS — golden lines passing on sides
+     ===================================================== */
+  const streaks = [];
+  const streakCount = isMobile ? 12 : 22;
+  const streakMat = new THREE.LineBasicMaterial({
+    color: 0xffe194, transparent: true, opacity: 0.65,
+    blending: THREE.AdditiveBlending, depthWrite: false
+  });
+
+  for (let i = 0; i < streakCount; i++) {
+    const len = 0.8 + Math.random() * 2.5;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, -len], 3));
+    const line = new THREE.Line(geo, streakMat);
+    const side = Math.random() < 0.5 ? -1 : 1;
+    line.position.set(
+      side * (2 + Math.random() * 2.5),
+      0.3 + Math.random() * 2.5,
+      (Math.random() - 0.5) * 60
+    );
+    scene.add(line);
+    streaks.push({
+      line,
+      speed: 20 + Math.random() * 30,
+      startZ: 15
+    });
+  }
+
+  /* =====================================================
+     MOUSE / GYRO PARALLAX (small, subtle)
      ===================================================== */
   let targetX = 0, targetY = 0;
-  let currX   = 0, currY   = 0;
+  let currX = 0, currY = 0;
 
   window.addEventListener('pointermove', e => {
     targetX = (e.clientX / window.innerWidth  - 0.5) * 2;
     targetY = -(e.clientY / window.innerHeight - 0.5) * 2;
   }, { passive: true });
-
-  window.addEventListener('pointerleave', () => {
-    targetX = 0; targetY = 0;
-  }, { passive: true });
-
-  // Device orientation tilt (mobile)
+  window.addEventListener('pointerleave', () => { targetX = 0; targetY = 0; }, { passive: true });
   window.addEventListener('deviceorientation', e => {
     if (e.gamma == null || e.beta == null) return;
     targetX = Math.max(-1, Math.min(1, e.gamma / 45));
@@ -210,53 +743,119 @@
      ===================================================== */
   let lastT = performance.now();
   let time  = 0;
+  let paused = false;
+  let roadScrollZ = 0;
+
+  document.addEventListener('visibilitychange', () => {
+    paused = document.hidden;
+    lastT = performance.now();
+  });
 
   function animate(now) {
     requestAnimationFrame(animate);
+    if (paused) return;
 
     const dt = Math.min(0.05, (now - lastT) / 1000);
     lastT = now;
     time += dt;
 
-    uniforms.uTime.value = time;
+    starMat.uniforms.uTime.value = time;
 
-    /* ---- Layer 1: main particles drift upward + wobble ---- */
-    const pos1 = geometry.attributes.position.array;
-    for (let i = 0; i < COUNT; i++) {
-      const ix = i * 3, iy = ix + 1, iz = ix + 2;
+    /* ---- Road scroll (illusion of motion) ---- */
+    const roadSpeed = 14;   // units per second
+    roadScrollZ -= roadSpeed * dt;
 
-      pos1[iy] += baseSpeeds[i] * 60 * dt;
-      pos1[ix] += Math.sin(time * wobbles[i] + phases[i]) * 0.008;
+    // Dashes
+    dashes.forEach(d => {
+      d.position.z += roadSpeed * dt;
+      if (d.position.z > 22) d.position.z -= 4 * Math.floor((ROAD_LENGTH) / 4);
+    });
 
-      // Wrap around when out of view
-      if (pos1[iy] > 36) {
-        pos1[iy] = -36;
-        pos1[ix] = (Math.random() - 0.5) * 70;
-        pos1[iz] = (Math.random() - 0.5) * 45;
+    // Grid texture offset
+    gridTex.offset.y = (gridTex.offset.y + roadSpeed * dt * 0.02) % 1;
+
+    // Poles — recycle when passed camera
+    polesData.forEach(p => {
+      p.position.z += roadSpeed * dt;
+      if (p.position.z > 22) {
+        p.position.z -= poleSpacing * poleCount;
+      }
+    });
+
+    /* ---- Bus bounce + slight tilt ---- */
+    const bounce = Math.sin(time * 3.2 + bus.userData.bouncePhase) * 0.035;
+    bus.position.y = bus.userData.baseY + bounce;
+    bus.rotation.z = Math.sin(time * 1.6) * 0.008;
+
+    /* ---- Wheels rotation ---- */
+    const wheelSpeed = roadSpeed / 0.55; // rad/s = v / r
+    bus.userData.wheels.forEach(w => {
+      w.rotation.x -= wheelSpeed * dt;
+    });
+
+    /* ---- Headlight beam flicker (very subtle) ---- */
+    bus.userData.beam.material.opacity = 0.12 + 0.02 * Math.sin(time * 8.3);
+
+    /* ---- Under-glow pulse ---- */
+    bus.userData.underGlow.material.opacity = 0.16 + 0.04 * Math.sin(time * 2.5);
+
+    /* ---- Speed streaks ---- */
+    streaks.forEach(s => {
+      s.line.position.z -= s.speed * dt;
+      if (s.line.position.z < -40) {
+        s.line.position.z = 20;
+        s.line.position.x = (Math.random() < 0.5 ? -1 : 1) * (2 + Math.random() * 2.5);
+        s.line.position.y = 0.3 + Math.random() * 2.5;
+      }
+    });
+
+    /* ---- Shooting stars ---- */
+    if (now > nextShoot) {
+      nextShoot = now + 5000 + Math.random() * 9000;
+      spawnShootingStar();
+    }
+    for (let i = shootingStars.length - 1; i >= 0; i--) {
+      const s = shootingStars[i];
+      s.life += dt;
+      const k = s.life / s.maxLife;
+      s.line.position.x += s.vx * dt;
+      s.line.position.y += s.vy * dt;
+      s.mat.opacity = 0.95 * Math.max(0, 1 - k);
+      if (k >= 1) {
+        scene.remove(s.line);
+        s.line.geometry.dispose();
+        s.mat.dispose();
+        shootingStars.splice(i, 1);
       }
     }
-    geometry.attributes.position.needsUpdate = true;
 
-    /* ---- Layer 2: deep layer, slower + subtle ---- */
-    const pos2 = deepGeo.attributes.position.array;
-    for (let i = 0; i < COUNT_DEEP; i++) {
-      const iy = i * 3 + 1;
-      pos2[iy] += deepSpeeds[i] * 60 * dt;
-      if (pos2[iy] > 45) pos2[iy] = -45;
-    }
-    deepGeo.attributes.position.needsUpdate = true;
-
-    /* ---- Parallax easing ---- */
+    /* ---- Camera — chase mode with parallax ---- */
     currX += (targetX - currX) * 0.045;
     currY += (targetY - currY) * 0.045;
 
-    camera.position.x = currX * 3.2;
-    camera.position.y = currY * 3.2;
-    camera.lookAt(scene.position);
-
-    /* ---- Very subtle rotation for organic feel ---- */
-    particles.rotation.z     = Math.sin(time * 0.15) * 0.035;
-    deepParticles.rotation.z = Math.sin(time * 0.08 + 1.2) * 0.02;
+    if (CONFIG.cameraMode === 'chase') {
+      // Bus ke peeche, thoda upar
+      const baseX = 0;
+      const baseY = 4.5;
+      const baseZ = 14;
+      camera.position.x = baseX + currX * 1.8;
+      camera.position.y = baseY - currY * 1.0 + bounce * 0.5;
+      camera.position.z = baseZ;
+      camera.lookAt(bus.position.x + currX * 2, 2.2, bus.position.z - 8);
+    } else if (CONFIG.cameraMode === 'side') {
+      camera.position.x = 12 + currX * 2;
+      camera.position.y = 3.5 + currY * 1.5;
+      camera.position.z = 4;
+      camera.lookAt(bus.position.x, 2, bus.position.z - 3);
+    } else {
+      // cinematic slow orbit
+      const r = 14;
+      const a = time * 0.15;
+      camera.position.x = Math.cos(a) * r;
+      camera.position.y = 5 + Math.sin(time * 0.3) * 1.5;
+      camera.position.z = Math.sin(a) * r + 2;
+      camera.lookAt(bus.position.x, 2.2, bus.position.z - 4);
+    }
 
     renderer.render(scene, camera);
   }
@@ -272,33 +871,20 @@
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, window.innerWidth < 768 ? 1.75 : 2));
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, window.innerWidth < 768 ? 1.5 : 2));
     }, 120);
   }, { passive: true });
 
   /* =====================================================
-     PAGE VISIBILITY — pause when hidden (battery save)
-     ===================================================== */
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      // Throttle: mark lastT so dt on resume doesn't spike
-      lastT = performance.now();
-    }
-  });
-
-  /* =====================================================
      THEME-AWARE OPACITY
-     Light theme par particles halkay, dark theme par prominent
      ===================================================== */
   const applyCanvasOpacity = () => {
     const theme = document.documentElement.dataset.theme;
-    canvas.style.opacity = theme === 'light' ? '0.5' : '0.85';
+    canvas.style.opacity = theme === 'light' ? '0.45' : '0.95';
   };
   applyCanvasOpacity();
-
   new MutationObserver(applyCanvasOpacity).observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ['data-theme']
+    attributes: true, attributeFilter: ['data-theme']
   });
 
 })();
