@@ -1,22 +1,29 @@
 /* =====================================================
-   FAREFLOW — MAIN APP LOGIC v2.1
+   FAREFLOW — MAIN APP LOGIC v3.0
+   =====================================================
+   • Boot loader progress (0→100%) with status
+   • Skeleton screen during bootstrap
+   • Sparkle button effect + 7-sec cooldown
    • Admin gating (super admin: fh87022@gmail.com)
-   • Boys list bug fixed (master sync)
    • Today's entry persistence (upsert + auto-load)
-   • Vehicle stepper (− / +) — no keyboard
+   • Vehicle stepper (− / +) with proper replace bug fix
    • Per-vehicle expenses with "Free" toggle
-   • Sliding gold tab indicators
-   • History bulk delete
+   • Sliding gold tab indicators (centered, dynamic)
+   • Boys card restructured (2-row grid, no X button)
+   • Filter tabs: All, Batches, Present, Absent, Not Paid
+   • Girls count × fare = total (synced to summary)
+   • History bulk delete + refresh button
    • PWA install prompt
    • Confirm modal (reusable)
    • Admin management tab
-   FIX v2.1:
-   • Unique subtab IDs (entry-subtab-* / settings-subtab-*)
-   • Boys Master list now renders empty-state clearly
-   • Batch select empty handling (auto-message)
-   • Subtab click routing updated for renamed IDs
+   FIX v3.0:
+   • Sub-tab 1 blank bug — proper panel activation
+   • Vehicle merge bug — replace, not merge (in firebase)
+   • Indicator centering — uses getBoundingClientRect
+   • Boys row: no X button, auto-height, responsive
+   • Girls tab: count + fare per + computed total
    ===================================================== */
-
+   
 /* =====================================================
    STATE
    ===================================================== */
@@ -29,12 +36,14 @@ const state = {
 
   trip: {
     date: new Date().toISOString().slice(0, 10),
-    vehicles: {},            // { Van: 2, Bus: 1 }
-    boys: [],                // [{ name, batch, vehicle, fare, absent, selected }]
+    vehicles: {},
+    boys: [],
+    girlsCount: 0,
+    girlsFarePer: 0,
     girlsTotal: 0,
     toll: 0,
     driver: 0,
-    expenses: {}             // { "Van 1": { toll, driver, tollFree, driverFree } }
+    expenses: {}
   },
 
   activeBatch: 'all',
@@ -43,7 +52,11 @@ const state = {
   adminsCache: [],
   usersCache: [],
   pwaPrompt: null,
-  loadedTodayId: null
+  loadedTodayId: null,
+  cooldown: {
+    signin: 0,
+    signup: 0
+  }
 };
 
 /* =====================================================
@@ -69,7 +82,9 @@ function toast(msg, ms = 2200) {
   el._t = setTimeout(() => el.classList.remove('show'), ms);
 }
 
-/* Reusable confirm modal → returns Promise<boolean> */
+/* =====================================================
+   CONFIRM MODAL
+   ===================================================== */
 function confirmDialog(title, msg, okText = 'Confirm') {
   return new Promise(resolve => {
     const modal = $('#confirm-modal');
@@ -96,8 +111,138 @@ function confirmDialog(title, msg, okText = 'Confirm') {
 }
 
 /* =====================================================
-   VEHICLE INSTANCES — flat list of concrete vehicles
-   { Van: 2, Bus: 1 } → ['Van 1', 'Van 2', 'Bus 1']
+   BOOT LOADER — now uses <progress> element
+   ===================================================== */
+const boot = {
+  el: null,
+  bar: null,     // <progress id="boot-bar">
+  pct: null,     // <output id="boot-pct">
+  status: null,  // <p id="boot-status">
+  value: 0,
+
+  init() {
+    this.el     = $('#boot-loader');
+    this.bar    = $('#boot-bar');
+    this.pct    = $('#boot-pct');
+    this.status = $('#boot-status');
+  },
+
+  set(value, label) {
+    this.value = Math.max(0, Math.min(100, value));
+    // Native <progress> uses .value attribute (max=100)
+    if (this.bar) this.bar.value = this.value;
+    if (this.pct) this.pct.textContent = Math.round(this.value) + '%';
+    if (label && this.status) this.status.textContent = label;
+  },
+
+  async hide() {
+    this.set(100, 'Ready!');
+    await new Promise(r => setTimeout(r, 350));
+    if (this.el) {
+      this.el.classList.add('hidden');
+      setTimeout(() => {
+        if (this.el) this.el.style.display = 'none';
+      }, 600);
+    }
+    document.body.classList.remove('no-scroll');
+  }
+};
+
+/* =====================================================
+   SKELETON
+   ===================================================== */
+function showSkeleton(show) {
+  const skel = $('#app-skeleton');
+  if (!skel) return;
+  skel.hidden = !show;
+}
+
+/* =====================================================
+   SPARKLE BUTTON EFFECT — uses <i> instead of <span>
+   ===================================================== */
+function spawnSparkles(btn, count = 14) {
+  if (!btn) return;
+
+  // Ensure sparkle layer exists (semantic <i>)
+  let layer = btn.querySelector('.sparkle-layer');
+  if (!layer) {
+    layer = document.createElement('i');
+    layer.className = 'sparkle-layer';
+    layer.setAttribute('aria-hidden', 'true');
+    btn.appendChild(layer);
+  }
+
+  const rect = btn.getBoundingClientRect();
+  const cx = rect.width / 2;
+  const cy = rect.height / 2;
+
+  for (let i = 0; i < count; i++) {
+    const dot = document.createElement('i');
+    dot.className = 'sparkle-dot';
+    dot.setAttribute('aria-hidden', 'true');
+
+    const angle = (Math.random() - 0.5) * Math.PI * 0.9;
+    const dist = 60 + Math.random() * 80;
+
+    const dir = Math.random() < 0.5 ? -1 : 1;
+    const dx = dir * (40 + Math.random() * 90);
+    const dy = Math.sin(angle) * dist * 0.6;
+
+    dot.style.left = cx + 'px';
+    dot.style.top = cy + 'px';
+    dot.style.setProperty('--dx', dx + 'px');
+    dot.style.setProperty('--dy', dy + 'px');
+    dot.style.setProperty('--dur', (700 + Math.random() * 400) + 'ms');
+
+    layer.appendChild(dot);
+
+    setTimeout(() => {
+      dot.remove();
+    }, 1200);
+  }
+
+  btn.classList.add('burst');
+  setTimeout(() => btn.classList.remove('burst'), 500);
+}
+
+/* =====================================================
+   BUTTON COOLDOWN (7 seconds)
+   ===================================================== */
+function applyCooldown(btn, key, seconds = 7) {
+  if (!btn) return false;
+  const now = Date.now();
+  const until = state.cooldown[key] || 0;
+  if (now < until) return false;
+
+  state.cooldown[key] = now + seconds * 1000;
+  btn.disabled = true;
+
+  const strongEl = btn.querySelector('strong');
+  const originalText = strongEl?.textContent || btn.textContent;
+
+  let remaining = seconds;
+  const tick = () => {
+    remaining--;
+    if (remaining > 0) {
+      if (strongEl) strongEl.textContent = `Wait ${remaining}s…`;
+      else btn.textContent = `Wait ${remaining}s…`;
+      setTimeout(tick, 1000);
+    } else {
+      if (strongEl) strongEl.textContent = originalText;
+      else btn.textContent = originalText;
+      btn.disabled = false;
+      state.cooldown[key] = 0;
+    }
+  };
+  if (strongEl) strongEl.textContent = `Wait ${remaining}s…`;
+  else btn.textContent = `Wait ${remaining}s…`;
+  setTimeout(tick, 1000);
+
+  return true;
+}
+
+/* =====================================================
+   VEHICLE INSTANCES
    ===================================================== */
 function getVehicleInstances() {
   const out = [];
@@ -134,7 +279,6 @@ function applyTheme(mode, animate = true) {
     resolved = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   }
   document.documentElement.dataset.theme = resolved;
-  // refresh indicators after theme change
   requestAnimationFrame(() => {
     positionIndicator($('#main-tabs'), '.tab-indicator', '.tab.active');
     positionIndicator($('#entry-subtabs'), '.subtab-indicator', '.subtab.active');
@@ -157,11 +301,13 @@ function positionIndicator(container, indicatorSel, activeSel) {
 
   const cRect = container.getBoundingClientRect();
   const aRect = active.getBoundingClientRect();
+
   const left = aRect.left - cRect.left;
   const width = aRect.width;
 
   ind.style.width = width + 'px';
-  ind.style.transform = `translateX(${left - 4}px)`;
+  ind.style.transform = `translateX(${left}px)`;
+  ind.classList.add('ready');
 }
 
 function initTabs() {
@@ -170,9 +316,11 @@ function initTabs() {
   const settingsSubs = $('#settings-subtabs');
 
   requestAnimationFrame(() => {
-    positionIndicator(mainTabs, '.tab-indicator', '.tab.active');
-    positionIndicator(entrySubs, '.subtab-indicator', '.subtab.active');
-    positionIndicator(settingsSubs, '.subtab-indicator', '.subtab.active');
+    requestAnimationFrame(() => {
+      positionIndicator(mainTabs, '.tab-indicator', '.tab.active');
+      positionIndicator(entrySubs, '.subtab-indicator', '.subtab.active');
+      positionIndicator(settingsSubs, '.subtab-indicator', '.subtab.active');
+    });
   });
 
   let rT;
@@ -184,6 +332,18 @@ function initTabs() {
       positionIndicator(settingsSubs, '.subtab-indicator', '.subtab.active');
     }, 100);
   }, { passive: true });
+
+  [entrySubs, settingsSubs].forEach(container => {
+    if (container) {
+      container.addEventListener('scroll', () => {
+        const active = container.querySelector('.subtab.active');
+        if (active) {
+          active.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+        }
+        positionIndicator(container, '.subtab-indicator', '.subtab.active');
+      }, { passive: true });
+    }
+  });
 }
 
 /* =====================================================
@@ -196,8 +356,14 @@ function initAuth() {
     if (!user) {
       state.isAdminUser = false;
       showView('login');
+      showSkeleton(false);
+      if (boot.value === 100) {
+        boot.el?.classList.add('hidden');
+      }
       return;
     }
+
+    boot.set(60, 'Verifying access…');
 
     try {
       await registerUserSafe(user);
@@ -205,47 +371,85 @@ function initAuth() {
       console.warn('registerUserSafe failed:', e);
     }
 
+    boot.set(70, 'Checking admin status…');
+
     const admin = await isAdmin(user.uid);
     state.isAdminUser = admin;
 
     if (!admin) {
+      boot.set(85, 'Awaiting approval');
       const pe = $('#pending-email');
       if (pe) pe.textContent = user.email || '';
       showView('pending');
+      await boot.hide();
       return;
     }
 
+    boot.set(80, 'Loading configuration…');
     showView('app');
-    await bootstrapUser(user);
+
+    showSkeleton(true);
+    await boot.hide();
+
+    try {
+      await bootstrapUser(user);
+    } finally {
+      showSkeleton(false);
+    }
   });
 
+  /* ------- SIGN IN ------- */
   $('#login-form').onsubmit = async e => {
     e.preventDefault();
+    const btn = $('#signin-btn');
+    if (!applyCooldown(btn, 'signin', 7)) return;
+
+    spawnSparkles(btn, 16);
+
     const email = $('#email').value.trim();
     const pass  = $('#password').value;
     const msg   = $('#auth-msg');
     msg.textContent = '';
+
     try {
       await auth.signInWithEmailAndPassword(email, pass);
     } catch (err) {
       msg.textContent = cleanAuthError(err);
+      state.cooldown.signin = 0;
+      if (btn) {
+        btn.disabled = false;
+        const strongEl = btn.querySelector('strong');
+        if (strongEl) strongEl.textContent = 'Sign In';
+      }
     }
   };
 
+  /* ------- SIGN UP ------- */
   $('#signup-btn').onclick = async () => {
+    const btn = $('#signup-btn');
     const email = $('#email').value.trim();
     const pass  = $('#password').value;
     const msg   = $('#auth-msg');
     msg.textContent = '';
+
     if (!email || pass.length < 6) {
       msg.textContent = 'Email + 6-char password required';
       return;
     }
+
+    if (!applyCooldown(btn, 'signup', 7)) return;
+    spawnSparkles(btn, 16);
+
     try {
       await auth.createUserWithEmailAndPassword(email, pass);
       toast('✅ Account created!');
     } catch (err) {
       msg.textContent = cleanAuthError(err);
+      state.cooldown.signup = 0;
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Create Account';
+      }
     }
   };
 
@@ -269,6 +473,7 @@ function cleanAuthError(err) {
   if (m.includes('weak-password'))        return 'Password kamzor hai (6+ chars).';
   if (m.includes('network'))              return 'Network issue. Internet check karein.';
   if (m.includes('invalid-credential'))   return 'Email ya password galat hai.';
+  if (m.includes('too-many-requests'))    return 'Bohat zyada attempts. Thori der baad try karein.';
   return m.replace('Firebase: ', '');
 }
 
@@ -276,18 +481,23 @@ function cleanAuthError(err) {
    BOOTSTRAP USER
    ===================================================== */
 async function bootstrapUser(user) {
+  boot.set(82, 'Loading your config…');
   const cfg = await loadUserConfigSafe(user.uid);
   state.vehicles   = cfg.vehicles;
   state.batches    = cfg.batches;
   state.boysMaster = cfg.boys;
 
+  boot.set(88, 'Loading trips…');
   state.trips = await loadTripsSafe(user.uid);
 
+  boot.set(92, 'Cleaning old data…');
   const removed = await cleanupOldTrips(user.uid);
   if (removed > 0) toast(`🧹 ${removed} purane trips delete kiye (3+ months)`);
 
+  boot.set(95, 'Loading today\'s entry…');
   await loadTodayIntoForm();
 
+  boot.set(97, 'Rendering…');
   renderVehicles();
   renderBatchTabs();
   renderBoysList();
@@ -303,10 +513,12 @@ async function bootstrapUser(user) {
 
   const adminsTab = $('#admins-tab-btn');
   if (adminsTab) adminsTab.hidden = !state.isAdminUser;
+
+  boot.set(100, 'Ready!');
 }
 
 /* =====================================================
-   LOAD TODAY'S ENTRY INTO FORM
+   LOAD TODAY'S ENTRY
    ===================================================== */
 async function loadTodayIntoForm() {
   if (!state.user) return;
@@ -320,12 +532,14 @@ async function loadTodayIntoForm() {
   }
 
   state.loadedTodayId = todayTrip.id;
-  state.trip.date       = todayTrip.date || today;
-  state.trip.vehicles   = { ...(todayTrip.vehicles || {}) };
-  state.trip.girlsTotal = todayTrip.girlsTotal || 0;
-  state.trip.toll       = todayTrip.toll || 0;
-  state.trip.driver     = todayTrip.driver || 0;
-  state.trip.expenses   = { ...(todayTrip.expenses || {}) };
+  state.trip.date         = todayTrip.date || today;
+  state.trip.vehicles     = { ...(todayTrip.vehicles || {}) };
+  state.trip.girlsCount   = todayTrip.girlsCount   || 0;
+  state.trip.girlsFarePer = todayTrip.girlsFarePer || 0;
+  state.trip.girlsTotal   = todayTrip.girlsTotal   || 0;
+  state.trip.toll         = todayTrip.toll         || 0;
+  state.trip.driver       = todayTrip.driver       || 0;
+  state.trip.expenses     = { ...(todayTrip.expenses || {}) };
 
   const savedBoys = Array.isArray(todayTrip.boys) ? todayTrip.boys : [];
   const map = new Map();
@@ -346,29 +560,26 @@ async function loadTodayIntoForm() {
 
   const dEl = $('#trip-date');
   if (dEl) dEl.value = state.trip.date;
-  const gEl = $('#girls-total');
-  if (gEl) gEl.value = state.trip.girlsTotal;
-  const tEl = $('#toll-cost');
-  if (tEl) tEl.value = state.trip.toll;
-  const drEl = $('#driver-cost');
-  if (drEl) drEl.value = state.trip.driver;
 
-  toast('📝 Today\'s entry loaded');
+  const gcEl = $('#girls-count');
+  if (gcEl) gcEl.value = state.trip.girlsCount;
+  const gpEl = $('#girls-fare-per');
+  if (gpEl) gpEl.value = state.trip.girlsFarePer;
+
+  updateGirlsTotal();
   updateSaveHint();
 }
 
 function updateSaveHint() {
   const hint = $('#save-hint');
   if (!hint) return;
-  if (state.loadedTodayId) {
-    hint.textContent = '✓ Aaj ki entry mojood hai — Save karke update karein';
-  } else {
-    hint.textContent = '';
-  }
+  hint.textContent = state.loadedTodayId
+    ? '✓ Aaj ki entry mojood hai — Save karke update karein'
+    : '';
 }
 
 /* =====================================================
-   BIND STATIC EVENTS (once)
+   BIND STATIC EVENTS
    ===================================================== */
 let bound = false;
 function bindStaticEvents() {
@@ -382,37 +593,47 @@ function bindStaticEvents() {
     tab.classList.add('active');
     $('#tab-' + tab.dataset.tab)?.classList.add('active');
     positionIndicator($('#main-tabs'), '.tab-indicator', '.tab.active');
+
     if (tab.dataset.tab === 'history') renderHistory();
     if (tab.dataset.tab === 'settings' && state.isAdminUser) refreshAdminsTab();
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        positionIndicator($('#entry-subtabs'), '.subtab-indicator', '.subtab.active');
+        positionIndicator($('#settings-subtabs'), '.subtab-indicator', '.subtab.active');
+      });
+    });
   });
 
-  /* ------- ENTRY SUB-TABS (uses entry-subtab-* IDs) ------- */
+  /* ------- ENTRY SUB-TABS ------- */
   $$('#entry-subtabs .subtab').forEach(st => st.onclick = () => {
     $$('#entry-subtabs .subtab').forEach(t => t.classList.remove('active'));
     $$('#tab-entry .subtab-panel').forEach(p => p.classList.remove('active'));
     st.classList.add('active');
     const panelId = 'entry-subtab-' + st.dataset.subtab;
-    $('#' + panelId)?.classList.add('active');
+    const panel = $('#' + panelId);
+    if (panel) panel.classList.add('active');
     positionIndicator($('#entry-subtabs'), '.subtab-indicator', '.subtab.active');
   });
 
-  /* ------- SETTINGS SUB-TABS (uses settings-subtab-* IDs) ------- */
+  /* ------- SETTINGS SUB-TABS ------- */
   $$('#settings-subtabs .subtab').forEach(st => st.onclick = () => {
     $$('#settings-subtabs .subtab').forEach(t => t.classList.remove('active'));
     $$('#tab-settings .subtab-panel').forEach(p => p.classList.remove('active'));
     st.classList.add('active');
     const panelId = 'settings-subtab-' + st.dataset.subtab;
-    $('#' + panelId)?.classList.add('active');
+    const panel = $('#' + panelId);
+    if (panel) panel.classList.add('active');
     positionIndicator($('#settings-subtabs'), '.subtab-indicator', '.subtab.active');
+
     if (st.dataset.subtab === 'admins' && state.isAdminUser) refreshAdminsTab();
     if (st.dataset.subtab === 'boysmaster') renderBoysMaster();
   });
 
   /* ------- INPUT BINDINGS ------- */
   const dateEl   = $('#trip-date');
-  const girlsEl  = $('#girls-total');
-  const tollEl   = $('#toll-cost');
-  const driverEl = $('#driver-cost');
+  const girlsCountEl = $('#girls-count');
+  const girlsFareEl  = $('#girls-fare-per');
 
   if (dateEl) {
     dateEl.value = state.trip.date;
@@ -431,9 +652,17 @@ function bindStaticEvents() {
     };
   }
 
-  if (girlsEl)  girlsEl.oninput  = e => { state.trip.girlsTotal = +e.target.value || 0; updateSummary(); };
-  if (tollEl)   tollEl.oninput   = e => { state.trip.toll       = +e.target.value || 0; updateSummary(); };
-  if (driverEl) driverEl.oninput = e => { state.trip.driver     = +e.target.value || 0; updateSummary(); };
+  if (girlsCountEl) girlsCountEl.oninput = e => {
+    state.trip.girlsCount = Math.max(0, +e.target.value || 0);
+    updateGirlsTotal();
+    updateSummary();
+  };
+
+  if (girlsFareEl) girlsFareEl.oninput = e => {
+    state.trip.girlsFarePer = Math.max(0, +e.target.value || 0);
+    updateGirlsTotal();
+    updateSummary();
+  };
 
   $('#save-trip').onclick = saveTrip;
 
@@ -462,17 +691,34 @@ function bindStaticEvents() {
   $('#add-boy-master').onsubmit   = addBoyMaster;
 
   /* ------- HISTORY ------- */
-  $('#history-search').oninput = e => renderHistory(e.target.value);
+  const searchInput = $('#history-search');
+  if (searchInput) searchInput.oninput = e => renderHistory(e.target.value);
+
+  const refreshHistBtn = $('#refresh-history-btn');
+  if (refreshHistBtn) refreshHistBtn.onclick = async () => {
+    refreshHistBtn.disabled = true;
+    refreshHistBtn.textContent = '🔄 Refreshing…';
+    try {
+      state.trips = await loadTripsSafe(state.user.uid);
+      renderHistory(searchInput ? searchInput.value : '');
+      toast('✅ History refreshed');
+    } catch (e) {
+      toast('❌ Refresh failed');
+    } finally {
+      refreshHistBtn.disabled = false;
+      refreshHistBtn.textContent = '🔄 Refresh History';
+    }
+  };
 
   const selectAllBtn = $('#history-select-all');
   if (selectAllBtn) selectAllBtn.onclick = () => {
     state.trips.forEach(t => state.historySelected.add(t.id));
-    renderHistory($('#history-search').value);
+    renderHistory(searchInput ? searchInput.value : '');
   };
   const clearSelBtn = $('#history-clear-sel');
   if (clearSelBtn) clearSelBtn.onclick = () => {
     state.historySelected.clear();
-    renderHistory($('#history-search').value);
+    renderHistory(searchInput ? searchInput.value : '');
   };
   const delBtn = $('#history-delete-btn');
   if (delBtn) delBtn.onclick = async () => {
@@ -488,7 +734,7 @@ function bindStaticEvents() {
     toast(`🗑️ ${removed} trip(s) delete`);
     state.historySelected.clear();
     state.trips = await loadTripsSafe(state.user.uid);
-    renderHistory($('#history-search').value);
+    renderHistory(searchInput ? searchInput.value : '');
   };
 
   /* ------- MODAL ------- */
@@ -503,7 +749,7 @@ function bindStaticEvents() {
 }
 
 /* =====================================================
-   VEHICLES — RENDER (with stepper)
+   VEHICLES — RENDER (stepper)
    ===================================================== */
 function renderVehicles() {
   const ul = $('#vehicle-list');
@@ -523,11 +769,13 @@ function renderVehicles() {
     li.className = 'vehicle-item' + (state.trip.vehicles[v] ? ' active' : '');
     li.dataset.v = v;
 
-    const label = document.createElement('div');
+    // Semantic: use <strong> as label (semantic heading-level)
+    const label = document.createElement('strong');
     label.className = 'veh-label';
     label.textContent = v;
 
-    const stepper = document.createElement('div');
+    // Semantic: <section> for stepper container
+    const stepper = document.createElement('section');
     stepper.className = 'stepper';
 
     const btnMinus = document.createElement('button');
@@ -535,7 +783,8 @@ function renderVehicles() {
     btnMinus.textContent = '−';
     btnMinus.setAttribute('aria-label', `Decrease ${v}`);
 
-    const valEl = document.createElement('div');
+    // Semantic: <output> for numeric value
+    const valEl = document.createElement('output');
     valEl.className = 'step-value';
     valEl.textContent = state.trip.vehicles[v] || 0;
 
@@ -583,7 +832,7 @@ function renderVehicles() {
 }
 
 /* =====================================================
-   EXPENSES — per-vehicle dynamic
+   EXPENSES — per-vehicle
    ===================================================== */
 function renderExpenses() {
   const ul = $('#expenses-list');
@@ -617,7 +866,8 @@ function renderExpenses() {
     const li = document.createElement('li');
     li.className = 'expense-row';
 
-    const vEl = document.createElement('div');
+    // Semantic: <strong> for vehicle name
+    const vEl = document.createElement('strong');
     vEl.className = 'exp-veh';
     vEl.textContent = v;
 
@@ -652,7 +902,8 @@ function renderExpenses() {
     freeCb.type = 'checkbox';
     freeCb.checked = !!(rec.tollFree && rec.driverFree);
 
-    const freeText = document.createElement('span');
+    // Semantic: <small> for "Free" text (natural inline text)
+    const freeText = document.createElement('small');
     freeText.textContent = 'Free';
 
     freeCb.onchange = () => {
@@ -691,24 +942,34 @@ function updateExpenseTotals() {
   const t2 = $('#exp-driver-total');
   if (t1) t1.textContent = fmt(toll);
   if (t2) t2.textContent = fmt(driver);
-
-  const tEl = $('#toll-cost');
-  const dEl = $('#driver-cost');
-  if (tEl) tEl.value = toll;
-  if (dEl) dEl.value = driver;
 }
 
 /* =====================================================
-   BATCH TABS
+   GIRLS — COUNT × FARE = TOTAL
+   ===================================================== */
+function updateGirlsTotal() {
+  const count = state.trip.girlsCount || 0;
+  const per   = state.trip.girlsFarePer || 0;
+  const total = count * per;
+  state.trip.girlsTotal = total;
+
+  const el = $('#girls-total');
+  if (el) el.textContent = fmt(total);
+}
+
+/* =====================================================
+   FILTER TABS
    ===================================================== */
 function renderBatchTabs() {
   const nav = $('#batch-tabs');
   if (!nav) return;
   nav.innerHTML = '';
 
-  const mkTab = (key, label) => {
+  const mkTab = (key, label, cls = '') => {
     const btn = document.createElement('button');
-    btn.className = 'batch-tab' + (state.activeBatch === key ? ' active' : '');
+    btn.className = 'batch-tab' +
+      (state.activeBatch === key ? ' active' : '') +
+      (cls ? ' ' + cls : '');
     btn.dataset.batch = key;
     btn.textContent = label;
     btn.onclick = () => {
@@ -721,10 +982,16 @@ function renderBatchTabs() {
 
   nav.append(mkTab('all', 'All'));
   state.batches.forEach(b => nav.append(mkTab(b, b)));
+
+  nav.append(mkTab('present', '✓ Present', 'filter-present'));
+  nav.append(mkTab('absent',  '✕ Absent',  'filter-absent'));
+  nav.append(mkTab('notpaid', '◌ Not Paid','filter-notpaid'));
 }
 
 /* =====================================================
-   BOYS LIST (Entry)
+   BOYS LIST
+   Row 1: [☐] Name  [Batch]
+   Row 2: [Vehicle ▼] [Fare] [☐ Absent]
    ===================================================== */
 function renderBoysList() {
   const ul = $('#boys-list');
@@ -752,14 +1019,35 @@ function renderBoysList() {
 
   syncTripBoys();
 
-  const filtered = state.trip.boys.filter(b =>
-    state.activeBatch === 'all' || String(b.batch) === String(state.activeBatch)
-  );
+  const filtered = state.trip.boys.filter(boy => {
+    const filter = state.activeBatch;
+
+    if (filter === 'all') return true;
+
+    if (filter === 'present') {
+      return !boy.absent && (+boy.fare || 0) > 0;
+    }
+
+    if (filter === 'absent') {
+      return boy.absent || (!boy.absent && (+boy.fare || 0) === 0);
+    }
+
+    if (filter === 'notpaid') {
+      return !boy.absent && (+boy.fare || 0) === 0;
+    }
+
+    return String(boy.batch) === String(filter);
+  });
 
   if (!filtered.length) {
+    let msg = 'Koi boy nahi mila';
+    if (state.activeBatch === 'present') msg = 'Koi present boy nahi (fare > 0)';
+    else if (state.activeBatch === 'absent') msg = 'Koi absent boy nahi';
+    else if (state.activeBatch === 'notpaid') msg = 'Sab boys ne fare pay kar diya hai';
+
     ul.innerHTML = `<li class="empty-state">
-      <strong>Is batch mein koi boy nahi</strong>
-      Doosra batch select karein ya naye boys add karein
+      <strong>${msg}</strong>
+      Filter change karein ya doosra batch select karein
     </li>`;
     updateBulkCount();
     return;
@@ -767,16 +1055,16 @@ function renderBoysList() {
 
   filtered.forEach(boy => {
     const globalIdx = state.trip.boys.indexOf(boy);
+    const isNotPaid = !boy.absent && (+boy.fare || 0) === 0;
+
     const li = document.createElement('li');
     li.className = 'boy-row' +
       (boy.absent ? ' absent' : '') +
-      (boy.selected ? ' selected' : '');
+      (boy.selected ? ' selected' : '') +
+      (isNotPaid ? ' not-paid' : '');
     li.dataset.idx = globalIdx;
 
-    const num = document.createElement('strong');
-    num.className = 'row-num';
-    num.textContent = '#';
-
+    /* --- Row 1: Select checkbox --- */
     const sel = document.createElement('input');
     sel.type = 'checkbox';
     sel.className = 'row-sel';
@@ -787,15 +1075,20 @@ function renderBoysList() {
       updateBulkCount();
     };
 
+    /* --- Row 1: Name --- */
     const name = document.createElement('strong');
     name.className = 'row-name';
     name.textContent = boy.name;
+    name.title = boy.name;
 
+    /* --- Row 1: Batch badge --- */
     const batch = document.createElement('em');
     batch.className = 'row-batch';
     batch.textContent = boy.batch;
 
+    /* --- Row 2: Vehicle dropdown --- */
     const vehSel = document.createElement('select');
+    vehSel.className = 'row-veh';
     const currentVeh = boy.vehicle || vehicles[0];
     if (!vehicles.includes(currentVeh)) boy.vehicle = vehicles[0];
     vehicles.forEach(v => {
@@ -806,28 +1099,41 @@ function renderBoysList() {
     });
     vehSel.onchange = () => { boy.vehicle = vehSel.value; };
 
+    /* --- Row 2: Fare input --- */
     const fareIn = document.createElement('input');
     fareIn.type = 'number';
     fareIn.min = 0;
+    fareIn.className = 'fare-in';
     fareIn.placeholder = 'Fare';
     fareIn.value = boy.fare || 0;
-    fareIn.oninput = () => { boy.fare = +fareIn.value || 0; updateSummary(); };
+    fareIn.oninput = () => {
+      boy.fare = +fareIn.value || 0;
+      li.classList.toggle('not-paid', !boy.absent && boy.fare === 0);
+      updateSummary();
+    };
 
-    const rm = document.createElement('button');
-    rm.type = 'button';
-    rm.className = 'remove-btn';
-    rm.style.borderColor = boy.absent ? 'rgba(110,231,168,0.4)' : 'rgba(255,100,100,0.4)';
-    rm.style.color = boy.absent ? 'var(--green)' : 'var(--red)';
-    rm.textContent = boy.absent ? '✓' : '✕';
-    rm.title = boy.absent ? 'Mark Present' : 'Mark Absent';
-    rm.onclick = () => {
-      boy.absent = !boy.absent;
+    /* --- Row 2: Absent toggle --- */
+    const absentLabel = document.createElement('label');
+    absentLabel.className = 'absent-toggle' + (boy.absent ? ' on' : '');
+    absentLabel.title = boy.absent ? 'Mark Present' : 'Mark Absent';
+
+    const absentCb = document.createElement('input');
+    absentCb.type = 'checkbox';
+    absentCb.checked = !!boy.absent;
+    absentCb.onchange = () => {
+      boy.absent = absentCb.checked;
       if (boy.absent) { boy.fare = 0; boy.selected = false; }
       renderBoysList();
       updateSummary();
     };
 
-    li.append(num, sel, name, batch, vehSel, fareIn, rm);
+    // Semantic: <small> instead of <span>
+    const absentText = document.createElement('small');
+    absentText.textContent = 'Absent';
+
+    absentLabel.append(absentCb, absentText);
+
+    li.append(sel, name, batch, vehSel, fareIn, absentLabel);
     ul.append(li);
   });
 
@@ -865,7 +1171,9 @@ function syncTripBoys() {
    ===================================================== */
 function bulkSelect(on) {
   state.trip.boys.forEach(b => {
-    if (state.activeBatch === 'all' || String(b.batch) === String(state.activeBatch)) {
+    if (state.activeBatch === 'all' ||
+        String(b.batch) === String(state.activeBatch) ||
+        ['present','absent','notpaid'].includes(state.activeBatch)) {
       b.selected = on;
     }
   });
@@ -913,7 +1221,9 @@ function updateSummary() {
   const absent  = state.trip.boys.filter(b => b.absent);
 
   const boysTotal = present.reduce((s, b) => s + (+b.fare || 0), 0);
-  const girls     = +($('#girls-total')?.value) || state.trip.girlsTotal || 0;
+
+  const girls = (state.trip.girlsCount || 0) * (state.trip.girlsFarePer || 0);
+  state.trip.girlsTotal = girls;
 
   let toll = 0, driver = 0;
   Object.values(state.trip.expenses || {}).forEach(r => {
@@ -921,9 +1231,8 @@ function updateSummary() {
     if (!r.driverFree) driver += +r.driver || 0;
   });
 
-  state.trip.girlsTotal = girls;
-  state.trip.toll       = toll;
-  state.trip.driver     = driver;
+  state.trip.toll   = toll;
+  state.trip.driver = driver;
 
   const totalFare = boysTotal + girls;
   const net       = totalFare - toll - driver;
@@ -946,51 +1255,59 @@ function updateSummary() {
 }
 
 /* =====================================================
-   SAVE TRIP (upsert today)
+   SAVE TRIP
    ===================================================== */
 async function saveTrip() {
   if (!state.user) return toast('Login required');
 
-  const vehiclesMap = { ...state.trip.vehicles };
-  if (!Object.keys(vehiclesMap).length) {
-    return toast('Kam az kam ek vehicle arrange karein');
-  }
-
-  syncTripBoys();
-
-  const present = state.trip.boys.filter(b => !b.absent);
-  const boysTotal = present.reduce((s, b) => s + (+b.fare || 0), 0);
-  const girls     = state.trip.girlsTotal || 0;
-
-  let toll = 0, driver = 0;
-  Object.values(state.trip.expenses || {}).forEach(r => {
-    if (!r.tollFree)   toll   += +r.toll   || 0;
-    if (!r.driverFree) driver += +r.driver || 0;
-  });
-
-  const totalFare = boysTotal + girls;
-  const net       = totalFare - toll - driver;
-
-  const payload = {
-    date: state.trip.date,
-    vehicles: vehiclesMap,
-    boys: state.trip.boys.map(b => ({
-      name: b.name,
-      batch: b.batch,
-      vehicle: b.vehicle,
-      fare: b.absent ? 0 : (+b.fare || 0),
-      absent: !!b.absent
-    })),
-    girlsTotal: girls,
-    boysTotal,
-    totalFare,
-    toll,
-    driver,
-    expenses: JSON.parse(JSON.stringify(state.trip.expenses || {})),
-    net
-  };
+  const btn = $('#save-trip');
+  if (btn) btn.disabled = true;
 
   try {
+    const vehiclesMap = { ...state.trip.vehicles };
+    if (!Object.keys(vehiclesMap).length) {
+      return toast('Kam az kam ek vehicle arrange karein');
+    }
+
+    syncTripBoys();
+
+    const present = state.trip.boys.filter(b => !b.absent);
+    const boysTotal = present.reduce((s, b) => s + (+b.fare || 0), 0);
+
+    const girlsCount   = state.trip.girlsCount   || 0;
+    const girlsFarePer = state.trip.girlsFarePer || 0;
+    const girlsTotal   = girlsCount * girlsFarePer;
+
+    let toll = 0, driver = 0;
+    Object.values(state.trip.expenses || {}).forEach(r => {
+      if (!r.tollFree)   toll   += +r.toll   || 0;
+      if (!r.driverFree) driver += +r.driver || 0;
+    });
+
+    const totalFare = boysTotal + girlsTotal;
+    const net       = totalFare - toll - driver;
+
+    const payload = {
+      date: state.trip.date,
+      vehicles: vehiclesMap,
+      boys: state.trip.boys.map(b => ({
+        name: b.name,
+        batch: b.batch,
+        vehicle: b.vehicle,
+        fare: b.absent ? 0 : (+b.fare || 0),
+        absent: !!b.absent
+      })),
+      expenses: JSON.parse(JSON.stringify(state.trip.expenses || {})),
+      girlsCount,
+      girlsFarePer,
+      girlsTotal,
+      boysTotal,
+      totalFare,
+      toll,
+      driver,
+      net
+    };
+
     const today = todayISO();
     let result;
 
@@ -1011,23 +1328,27 @@ async function saveTrip() {
     if (state.trip.date !== today) resetTripForm();
   } catch (err) {
     toast('❌ Save fail: ' + (err.message || err.code));
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
 function resetTripForm() {
-  state.trip.vehicles   = {};
-  state.trip.boys       = [];
-  state.trip.girlsTotal = 0;
-  state.trip.toll       = 0;
-  state.trip.driver     = 0;
-  state.trip.expenses   = {};
-  state.loadedTodayId   = null;
+  state.trip.vehicles     = {};
+  state.trip.boys         = [];
+  state.trip.girlsCount   = 0;
+  state.trip.girlsFarePer = 0;
+  state.trip.girlsTotal   = 0;
+  state.trip.toll         = 0;
+  state.trip.driver       = 0;
+  state.trip.expenses     = {};
+  state.loadedTodayId     = null;
 
   const setV = (id, v) => { const el = $(id); if (el) el.value = v; };
-  setV('#girls-total', 0);
-  setV('#toll-cost', 0);
-  setV('#driver-cost', 0);
+  setV('#girls-count', 0);
+  setV('#girls-fare-per', 0);
 
+  updateGirlsTotal();
   renderVehicles();
   renderBoysList();
   renderExpenses();
@@ -1036,7 +1357,7 @@ function resetTripForm() {
 }
 
 /* =====================================================
-   HISTORY — RENDER
+   HISTORY
    ===================================================== */
 function renderHistory(filter = '') {
   const ul = $('#history-list');
@@ -1076,7 +1397,8 @@ function renderHistory(filter = '') {
       updateHistoryCount();
     };
 
-    const body = document.createElement('div');
+    // Semantic: <article> for content body
+    const body = document.createElement('article');
     body.className = 'hist-body';
     body.style.cursor = 'pointer';
     body.onclick = () => showTripDetails(t);
@@ -1086,7 +1408,8 @@ function renderHistory(filter = '') {
     const time = document.createElement('time');
     time.textContent = t.date || '—';
     if (t.date === today) {
-      const tag = document.createElement('span');
+      // Semantic: <small> instead of <span>
+      const tag = document.createElement('small');
       tag.className = 'today-tag';
       tag.textContent = 'TODAY';
       time.append(' ', tag);
@@ -1183,10 +1506,17 @@ function showTripDetails(t) {
     `);
   }
 
+  const gCount = t.girlsCount || 0;
+  const gPer   = t.girlsFarePer || 0;
+  const gTotal = t.girlsTotal || (gCount * gPer) || 0;
   body.insertAdjacentHTML('beforeend', `
     <section class="modal-section">
       <h3>👧 Girls</h3>
-      <ul><li><em>Girls Jo Total Kirayo</em><strong>${fmt(t.girlsTotal)}</strong></li></ul>
+      <ul>
+        <li><em>Count</em><strong>${gCount}</strong></li>
+        <li><em>Fare per Girl</em><strong>${fmt(gPer)}</strong></li>
+        <li><em>Total Collected</em><strong>${fmt(gTotal)}</strong></li>
+      </ul>
     </section>
   `);
 
@@ -1195,7 +1525,7 @@ function showTripDetails(t) {
       <h3>💰 Financials</h3>
       <ul>
         <li><em>Boys Collected</em><strong>${fmt(t.boysTotal)}</strong></li>
-        <li><em>Girls Collected</em><strong>${fmt(t.girlsTotal)}</strong></li>
+        <li><em>Girls Collected</em><strong>${fmt(gTotal)}</strong></li>
         <li><em>Total Fare</em><strong>${fmt(t.totalFare)}</strong></li>
         <li><em>Toll (–)</em><strong>${fmt(t.toll)}</strong></li>
         <li><em>Driver Cost (–)</em><strong>${fmt(t.driver)}</strong></li>
@@ -1292,8 +1622,6 @@ function renderBatchSettings() {
 
 /* =====================================================
    SETTINGS — BOYS MASTER
-   FIX v2.1: Emits clear empty-state message and
-   handles the case when no batches exist.
    ===================================================== */
 function renderBoysMaster() {
   const ul = $('#boys-master');
@@ -1303,7 +1631,6 @@ function renderBoysMaster() {
   ul.innerHTML = '';
   sel.innerHTML = '';
 
-  // Populate batch dropdown
   if (!state.batches.length) {
     const opt = document.createElement('option');
     opt.value = '';
@@ -1319,7 +1646,6 @@ function renderBoysMaster() {
     });
   }
 
-  // Empty boys list
   if (!state.boysMaster.length) {
     ul.innerHTML = `<li class="empty-state">
       <strong>Abhi koi boy add nahi hua</strong>
@@ -1481,11 +1807,13 @@ async function refreshAdminsTab() {
       const li = document.createElement('li');
       li.className = 'admin-row' + (isAdm ? ' is-admin' : '');
 
-      const av = document.createElement('div');
+      // Semantic: <output> for avatar
+      const av = document.createElement('output');
       av.className = 'admin-avatar';
       av.textContent = (u.email || '?')[0].toUpperCase();
 
-      const info = document.createElement('div');
+      // Semantic: <section> for info block
+      const info = document.createElement('section');
       info.className = 'admin-info';
       const strong = document.createElement('strong');
       strong.textContent = u.email || '(no email)';
@@ -1600,10 +1928,28 @@ document.head.append(rippleStyle);
    BOOT
    ===================================================== */
 document.addEventListener('DOMContentLoaded', () => {
+  boot.init();
+  boot.set(5, 'Starting up…');
+  document.body.classList.add('no-scroll');
+
   initTheme();
+  boot.set(15, 'Theme ready');
+
   initAuth();
+  boot.set(30, 'Auth initializing…');
+
   initPWA();
+  boot.set(40, 'PWA checked');
 
   const d = $('#trip-date');
   if (d) d.value = todayISO();
+
+  // Safety timeout
+  setTimeout(() => {
+    if (boot.value < 100) {
+      boot.set(100, 'Ready!');
+      boot.hide();
+      showSkeleton(false);
+    }
+  }, 12000);
 });

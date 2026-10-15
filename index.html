@@ -16,7 +16,7 @@
     <!-- PWA MANIFEST -->
     <link rel="manifest" href="manifest.json" />
 
-    <!-- PWA ICONS (PNG required by Chrome for install) -->
+    <!-- PWA ICONS -->
     <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
     <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png" />
     <link rel="apple-touch-icon" href="icon-192.png" />
@@ -29,21 +29,57 @@
 
 <body>
 
+    <!-- ================= BOOT LOADER (progress) ================= -->
+    <section id="boot-loader" class="boot-loader" role="status" aria-live="polite">
+        <section class="boot-inner">
+            <h1 class="boot-brand">FareFlow</h1>
+            <progress class="boot-bar" id="boot-bar" value="0" max="100" aria-label="Loading progress"></progress>
+            <output class="boot-pct" id="boot-pct" for="boot-bar">0%</output>
+            <p class="boot-status" id="boot-status">Initializing…</p>
+        </section>
+    </section>
+
+    <!-- ================= SKELETON (shown while app loads) ================= -->
+    <section id="app-skeleton" class="app-skeleton" hidden aria-hidden="true">
+        <section class="skel-nav">
+            <hr class="skel-line w-30" />
+            <i class="skel-circle"></i>
+        </section>
+        <nav class="skel-tabs">
+            <aside class="skel-chip"></aside>
+            <aside class="skel-chip"></aside>
+            <aside class="skel-chip"></aside>
+        </nav>
+        <article class="skel-card">
+            <hr class="skel-line w-40" />
+            <hr class="skel-line w-90" />
+            <hr class="skel-line w-70" />
+            <section class="skel-grid">
+                <aside class="skel-block"></aside>
+                <aside class="skel-block"></aside>
+                <aside class="skel-block"></aside>
+                <aside class="skel-block"></aside>
+            </section>
+            <hr class="skel-line w-50" />
+            <hr class="skel-line w-80" />
+        </article>
+    </section>
+
     <!-- THREE.JS CANVAS -->
     <canvas id="bg-canvas" aria-hidden="true"></canvas>
 
-    <!-- PWA INSTALL PROMPT (hidden by default) -->
+    <!-- PWA INSTALL PROMPT -->
     <aside id="pwa-install" class="pwa-install" hidden>
-        <div class="pwa-install-content">
-            <span class="pwa-icon">📲</span>
-            <div class="pwa-text">
+        <section class="pwa-install-content">
+            <output class="pwa-icon" aria-hidden="true">📲</output>
+            <section class="pwa-text">
                 <strong>Install FareFlow</strong>
                 <small>Home screen par add karein — fast & offline</small>
-            </div>
-        </div>
+            </section>
+        </section>
         <menu class="pwa-actions">
-            <button id="pwa-dismiss" class="mini-btn">Later</button>
-            <button id="pwa-install-btn" class="mini-btn gold">Install</button>
+            <li><button id="pwa-dismiss" class="mini-btn" type="button">Later</button></li>
+            <li><button id="pwa-install-btn" class="mini-btn gold" type="button">Install</button></li>
         </menu>
     </aside>
 
@@ -65,8 +101,12 @@
                 <em>Password</em>
             </label>
 
-            <button type="submit" class="btn-primary ripple"><strong>Sign In</strong></button>
-            <button type="button" id="signup-btn" class="btn-ghost">Create Account</button>
+            <button type="submit" id="signin-btn" class="btn-primary ripple sparkle-btn">
+                <strong>Sign In</strong>
+            </button>
+            <button type="button" id="signup-btn" class="btn-ghost sparkle-btn">
+                Create Account
+            </button>
             <p id="auth-msg" class="auth-msg" role="alert"></p>
         </form>
     </main>
@@ -78,8 +118,8 @@
                 <h1 class="brand-small">FareFlow</h1>
                 <p class="tagline">Access Pending</p>
             </header>
-            <div class="pending-icon">⏳</div>
-            <h2 class="pending-title">Approval Pending</h2>
+            <output class="pending-icon" aria-hidden="true">⏳</output>
+            <h2 class="pending-title">Halnr G &nbsp;kar puta Thun jo Cha Wan j</h2>
             <p class="pending-msg">
                 Aapka account register ho gaya hai lekin <strong>admin approval</strong> ka intezar hai.
                 Jab tak koi admin aapko approve nahi karta, aap system access nahi kar sakte.
@@ -96,44 +136,44 @@
         <nav class="app-nav glass-card">
             <h1 class="brand-small">FareFlow</h1>
             <menu class="nav-actions">
-                <button id="theme-toggle" class="icon-btn" title="Toggle theme" aria-label="Toggle theme">🌓</button>
-                <button id="logout-btn" class="icon-btn" title="Logout" aria-label="Logout">⏏</button>
+                <li><button id="theme-toggle" class="icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">🌓</button></li>
+                <li><button id="logout-btn" class="icon-btn" type="button" title="Logout" aria-label="Logout">⏏</button></li>
             </menu>
         </nav>
 
-        <!-- TOP TABS (sliding gold indicator) -->
+        <!-- TOP TABS -->
         <nav class="tabs glass-card" role="tablist" id="main-tabs">
-            <span class="tab-indicator" aria-hidden="true"></span>
-            <button class="tab active" data-tab="entry" role="tab">📝 Entry</button>
-            <button class="tab" data-tab="history" role="tab">📚 History</button>
-            <button class="tab" data-tab="settings" role="tab">⚙️ Settings</button>
+            <i class="tab-indicator" aria-hidden="true"></i>
+            <button class="tab active" data-tab="entry" role="tab" type="button">📝 Entry</button>
+            <button class="tab" data-tab="history" role="tab" type="button">📚 History</button>
+            <button class="tab" data-tab="settings" role="tab" type="button">⚙️ Settings</button>
         </nav>
 
         <!-- ============ TAB: ENTRY ============ -->
         <section id="tab-entry" class="tab-panel active">
 
-            <!-- ENTRY SUB-TABS (sliding gold indicator) -->
+            <!-- ENTRY SUB-TABS -->
             <nav class="subtabs glass-card" role="tablist" id="entry-subtabs">
-                <span class="subtab-indicator" aria-hidden="true"></span>
-                <button class="subtab active" data-subtab="trip" role="tab">
+                <i class="subtab-indicator" aria-hidden="true"></i>
+                <button class="subtab active" data-subtab="trip" role="tab" type="button">
                     <em>1</em><strong>Date & Vehicles</strong>
                 </button>
-                <button class="subtab" data-subtab="boys" role="tab">
+                <button class="subtab" data-subtab="boys" role="tab" type="button">
                     <em>2</em><strong>Boys</strong>
                 </button>
-                <button class="subtab" data-subtab="girls" role="tab">
+                <button class="subtab" data-subtab="girls" role="tab" type="button">
                     <em>3</em><strong>Girls</strong>
                 </button>
-                <button class="subtab" data-subtab="expenses" role="tab">
+                <button class="subtab" data-subtab="expenses" role="tab" type="button">
                     <em>4</em><strong>Expenses</strong>
                 </button>
-                <button class="subtab" data-subtab="summary" role="tab">
+                <button class="subtab" data-subtab="summary" role="tab" type="button">
                     <em>5</em><strong>Summary</strong>
                 </button>
             </nav>
 
             <!-- SUB-TAB: TRIP / DATE & VEHICLES -->
-            <article id="subtab-trip" class="subtab-panel active">
+            <article id="entry-subtab-trip" class="subtab-panel active">
                 <section class="glass-card">
                     <header class="card-head">
                         <h2>📅 Trip Date</h2>
@@ -157,26 +197,26 @@
                 <section class="glass-card">
                     <header class="card-head">
                         <h2>👦 Boys — Attendance & Fare</h2>
-                        <p class="hint">Batch tab se filter karein. Absent checkbox + bulk fare entry available hai.</p>
+                        <p class="hint">Filter tabs se Present / Absent / Not Paid dekhein</p>
                     </header>
 
-                    <!-- BATCH FILTER TABS -->
+                    <!-- FILTER TABS -->
                     <nav id="batch-tabs" class="batch-tabs" role="tablist">
-                        <button class="batch-tab active" data-batch="all">All</button>
+                        <button class="batch-tab active" data-batch="all" type="button">All</button>
                     </nav>
 
                     <!-- BULK ACTION BAR -->
                     <aside id="bulk-bar" class="bulk-bar">
                         <menu class="bulk-left">
-                            <button type="button" id="select-all-btn" class="mini-btn">✓ All</button>
-                            <button type="button" id="clear-sel-btn" class="mini-btn">✕ Clear</button>
-                            <small id="sel-count">0 selected</small>
+                            <li><button type="button" id="select-all-btn" class="mini-btn">✓ All</button></li>
+                            <li><button type="button" id="clear-sel-btn" class="mini-btn">✕ Clear</button></li>
+                            <li><small id="sel-count">0 selected</small></li>
                         </menu>
                         <menu class="bulk-right">
-                            <input type="number" id="bulk-fare" placeholder="Fare" min="0" class="bulk-input" />
-                            <button type="button" id="apply-fare-btn" class="mini-btn gold">Apply Fare</button>
-                            <button type="button" id="mark-absent-btn" class="mini-btn red">Absent</button>
-                            <button type="button" id="mark-present-btn" class="mini-btn green">Present</button>
+                            <li><input type="number" id="bulk-fare" placeholder="Fare" min="0" class="bulk-input" /></li>
+                            <li><button type="button" id="apply-fare-btn" class="mini-btn gold">Apply Fare</button></li>
+                            <li><button type="button" id="mark-absent-btn" class="mini-btn red">Absent</button></li>
+                            <li><button type="button" id="mark-present-btn" class="mini-btn green">Present</button></li>
                         </menu>
                     </aside>
 
@@ -189,16 +229,31 @@
                 <section class="glass-card">
                     <header class="card-head">
                         <h2>👧 Girls — Total Kiraya</h2>
-                        <p class="hint">Admin manually total likhega (koi naam nahi)</p>
+                        <p class="hint">Total girls count aur fare daalein</p>
                     </header>
+
                     <label class="field">
-                        <input type="number" id="girls-total" placeholder=" " min="0" value="0" />
-                        <em>Girls Jo Total Kirayo (PKR)</em>
+                        <input type="number" id="girls-count" placeholder=" " min="0" value="0" />
+                        <em>Total Girls Count</em>
                     </label>
+
+                    <label class="field">
+                        <input type="number" id="girls-fare-per" placeholder=" " min="0" value="0" />
+                        <em>Fare per Girl (PKR)</em>
+                    </label>
+
+                    <output class="girls-total-display">
+                        <em>Total Girls Collected</em>
+                        <strong id="girls-total">Rs 0</strong>
+                    </output>
+
+                    <p class="hint" style="margin-top:.6rem;text-align:center">
+                        💡 Ye total <strong>Summary</strong> tab mein Girls Collected mein automatically add hoga
+                    </p>
                 </section>
             </article>
 
-            <!-- SUB-TAB: EXPENSES (per-vehicle dynamic) -->
+            <!-- SUB-TAB: EXPENSES -->
             <article id="entry-subtab-expenses" class="subtab-panel">
                 <section class="glass-card">
                     <header class="card-head">
@@ -206,10 +261,10 @@
                         <p class="hint">Har vehicle ka Toll + Driver cost alag. Free mark karne ke liye "Free" checkbox use karein.</p>
                     </header>
                     <ul id="expenses-list" class="expenses-list"></ul>
-                    <div class="expenses-total">
+                    <output class="expenses-total">
                         <small>Total Toll: <strong id="exp-toll-total">Rs 0</strong></small>
                         <small>Total Driver: <strong id="exp-driver-total">Rs 0</strong></small>
-                    </div>
+                    </output>
                 </section>
             </article>
 
@@ -249,11 +304,14 @@
                     <h2>📚 Saved Trips (Last 3 Months)</h2>
                     <input type="search" id="history-search" placeholder="Search by date (YYYY-MM-DD)…" class="search-input" />
                     <menu id="history-bulk-bar" class="history-bulk-bar" hidden>
-                        <button type="button" id="history-select-all" class="mini-btn">✓ All</button>
-                        <button type="button" id="history-clear-sel" class="mini-btn">✕ Clear</button>
-                        <small id="history-sel-count">0 selected</small>
-                        <button type="button" id="history-delete-btn" class="mini-btn red">🗑️ Delete Selected</button>
+                        <li><button type="button" id="history-select-all" class="mini-btn">✓ All</button></li>
+                        <li><button type="button" id="history-clear-sel" class="mini-btn">✕ Clear</button></li>
+                        <li><small id="history-sel-count">0 selected</small></li>
+                        <li><button type="button" id="history-delete-btn" class="mini-btn red">🗑️ Delete Selected</button></li>
                     </menu>
+                    <button type="button" id="refresh-history-btn" class="btn-ghost" style="margin-top:.6rem">
+                        🔄 Refresh History
+                    </button>
                 </header>
                 <ul id="history-list" class="history-list"></ul>
             </article>
@@ -262,19 +320,19 @@
         <!-- ============ TAB: SETTINGS ============ -->
         <section id="tab-settings" class="tab-panel">
 
-            <!-- SETTINGS SUB-TABS (sliding gold indicator) -->
+            <!-- SETTINGS SUB-TABS -->
             <nav class="subtabs glass-card" role="tablist" id="settings-subtabs">
-                <span class="subtab-indicator" aria-hidden="true"></span>
-                <button class="subtab active" data-subtab="vehicles" role="tab">
+                <i class="subtab-indicator" aria-hidden="true"></i>
+                <button class="subtab active" data-subtab="vehicles" role="tab" type="button">
                     <em>🚐</em><strong>Vehicles</strong>
                 </button>
-                <button class="subtab" data-subtab="batches" role="tab">
+                <button class="subtab" data-subtab="batches" role="tab" type="button">
                     <em>🏷️</em><strong>Batches</strong>
                 </button>
-                <button class="subtab" data-subtab="boysmaster" role="tab">
+                <button class="subtab" data-subtab="boysmaster" role="tab" type="button">
                     <em>👦</em><strong>Boys List</strong>
                 </button>
-                <button class="subtab" data-subtab="admins" role="tab" id="admins-tab-btn">
+                <button class="subtab" data-subtab="admins" role="tab" type="button" id="admins-tab-btn">
                     <em>👑</em><strong>Create Admins</strong>
                 </button>
             </nav>
@@ -344,7 +402,7 @@
     <dialog id="detail-modal" class="glass-card modal">
         <header class="modal-head">
             <h2 id="modal-title">Trip Details</h2>
-            <button id="modal-close" class="icon-btn">✕</button>
+            <button id="modal-close" class="icon-btn" type="button">✕</button>
         </header>
         <section id="modal-body" class="modal-body"></section>
     </dialog>
@@ -357,8 +415,8 @@
         <section class="modal-body">
             <p id="confirm-msg" style="margin-bottom:1rem"></p>
             <menu class="confirm-actions">
-                <button type="button" id="confirm-cancel" class="btn-ghost">Cancel</button>
-                <button type="button" id="confirm-ok" class="btn-primary ripple"><strong>Confirm</strong></button>
+                <li><button type="button" id="confirm-cancel" class="btn-ghost">Cancel</button></li>
+                <li><button type="button" id="confirm-ok" class="btn-primary ripple"><strong>Confirm</strong></button></li>
             </menu>
         </section>
     </dialog>

@@ -1,15 +1,15 @@
 /* =====================================================
-   FAREFLOW — SERVICE WORKER (PWA) v2.0.0
+   FAREFLOW — SERVICE WORKER (PWA) v3.0.0
    • Cache-first for static assets
    • Network-first for Firebase / API calls
    • Auto-update on version bump
    • Offline fallback to index.html
-   • FIX v2.0: PNG icons precache (install requirement)
-   • FIX v2.0: Stale-while-revalidate for HTML
-   • FIX v2.0: Auto-cleanup old caches on activate
+   • FIX v3.0: PNG icons precache (install requirement)
+   • FIX v3.0: Stale-while-revalidate for HTML
+   • FIX v3.0: Auto-cleanup old caches on activate
    ===================================================== */
 
-const CACHE_VERSION = 'fareflow-v2.0.0';
+const CACHE_VERSION = 'fareflow-v3.0.0';
 const STATIC_CACHE  = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 

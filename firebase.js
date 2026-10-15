@@ -47,7 +47,7 @@ db.enablePersistence({ synchronizeTabs: true }).catch(err => {
    users     → { uid, email, createdAt, lastLogin }
    admins    → { uid, email, grantedAt, grantedBy }
    configs   → { uid, vehicles, batches, boys, updatedAt }
-   trips     → { uid, date, vehicles, boys, ... }
+   trips     → { uid, date, vehicles, boys, expenses, ... }
    ===================================================== */
 const COL_USERS   = 'users';
 const COL_ADMINS  = 'admins';
@@ -68,7 +68,7 @@ const SUPER_ADMIN_EMAILS = [
 /* =====================================================
    USER REGISTRATION — called on every login
    Saves/updates user record in `users` collection.
-   First ever user → auto admin (bootstrap).
+   Super admin email → auto-grant. Bootstrap fallback.
    ===================================================== */
 async function registerUserSafe(user) {
   if (!user || !user.uid) return null;
@@ -97,7 +97,7 @@ async function registerUserSafe(user) {
 
     /* ---------- ADMIN BOOTSTRAP LOGIC ---------- */
 
-    // Case 1: Super-admin email list mein hai → auto-grant (hamesha)
+    // Case 1: Super-admin email list mein hai → auto-grant
     if (SUPER_ADMIN_EMAILS.map(e => e.toLowerCase()).includes(emailLower)) {
       const already = await isAdmin(user.uid);
       if (!already) {
@@ -107,15 +107,13 @@ async function registerUserSafe(user) {
       return true;
     }
 
-    // Case 2: Koi bhi admin nahi hai → pehle aane wale ko bootstrap admin banao
-    // (Fallback safety — agar super-admin abhi tak login nahi hua)
+    // Case 2: Koi bhi admin nahi hai → bootstrap admin
     const anyAdmin = await hasAnyAdmin();
     if (!anyAdmin) {
       await grantAdmin(user.uid, user.email, 'system-bootstrap');
       console.log('👑 Bootstrap admin granted (no admin existed):', user.email);
     }
 
-    // Case 3: Warna kuch nahi — pending user rahega
     return true;
   } catch (err) {
     console.error('❌ registerUserSafe failed:', err);
@@ -143,8 +141,7 @@ async function hasAnyAdmin() {
     return !snap.empty;
   } catch (err) {
     console.warn('⚠️ hasAnyAdmin failed:', err.message);
-    // Safe default: assume admin exists so we don't accidentally grant
-    return true;
+    return true; // safe default
   }
 }
 
@@ -170,7 +167,6 @@ async function grantAdmin(uid, email, grantedBy = 'unknown') {
 async function revokeAdmin(uid) {
   if (!uid) throw new Error('uid required');
   try {
-    // Safety: don't let the last admin remove themselves
     const snap = await db.collection(COL_ADMINS).get();
     if (snap.size <= 1) {
       throw new Error('Last admin cannot be removed');
@@ -200,7 +196,6 @@ async function listAllUsers() {
   try {
     const snap = await db.collection(COL_USERS).get();
     const users = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    // Client-side sort: newest lastLogin first
     users.sort((a, b) => {
       const aT = a.lastLogin?.seconds || a.createdAt?.seconds || 0;
       const bT = b.lastLogin?.seconds || b.createdAt?.seconds || 0;
@@ -257,7 +252,6 @@ async function cleanupOldTrips(userId) {
 
 /* =====================================================
    SAFE TRIP LOADER (History)
-   Try indexed query, fallback to client-side sort.
    ===================================================== */
 async function loadTripsSafe(userId, limit = 200) {
   // Attempt 1: Indexed query
@@ -298,10 +292,19 @@ async function loadTripsSafe(userId, limit = 200) {
 }
 
 /* =====================================================
-   TODAY'S ENTRY — UPSERT LOGIC
-   Aaj ki date ke liye ek single doc per user.
-   Bar bar save karne par same doc update hota hai
-   (naya nahi banta), isse edit/update asaan ho jata hai.
+   TODAY'S ENTRY — UPSERT (with REPLACE fix)
+   =====================================================
+   PROBLEM (v2.1):
+   Bar bar save karne par `merge: true` purane vehicle
+   keys ko overwrite nahi karta — isliye agar user ne
+   pehle "Van 1" save kiya, phir "Van" 0 karke "Bus" 1
+   kiya, to Firestore mein dono "Van" aur "Bus" dono
+   mojood rehte the.
+
+   FIX (v3.0):
+   - Fields ko COMPLETELY REPLACE karo (merge: false)
+   - `set()` without merge → poora doc overwrite
+   - Sirf `createdAt` preserve karo (agar existing hai)
    ===================================================== */
 
 /* Deterministic ID: `${uid}_${YYYY-MM-DD}` */
@@ -309,7 +312,7 @@ function todayDocId(uid, dateStr) {
   return `${uid}_${dateStr}`;
 }
 
-/* Save or update today's trip (upsert) */
+/* Save or update today's trip (upsert with REPLACE) */
 async function saveTodayTripSafe(userId, dateStr, payload) {
   const docId = todayDocId(userId, dateStr);
   const ref = db.collection(COL_TRIPS).doc(docId);
@@ -319,23 +322,61 @@ async function saveTodayTripSafe(userId, dateStr, payload) {
     const now = FieldValue.serverTimestamp();
 
     if (existing.exists) {
-      // UPDATE
+      // ---- UPDATE: replace vehicles/boys/expenses completely ----
+      // Preserve createdAt from existing doc
+      const prevCreatedAt = existing.data()?.createdAt || now;
+
       await ref.set({
-        ...payload,
-        uid: userId,
+        // Replace-mode fields (arrays/objects fully overwritten)
+        vehicles:  payload.vehicles  || {},
+        boys:      payload.boys      || [],
+        expenses:  payload.expenses  || {},
+
+        // Aggregates
+        girlsCount:   payload.girlsCount   ?? 0,
+        girlsFarePer: payload.girlsFarePer ?? 0,
+        girlsTotal:   payload.girlsTotal   ?? 0,
+        boysTotal:    payload.boysTotal    ?? 0,
+        totalFare:    payload.totalFare    ?? 0,
+        toll:         payload.toll         ?? 0,
+        driver:       payload.driver       ?? 0,
+        net:          payload.net          ?? 0,
+
+        // Meta
+        uid:  userId,
         date: dateStr,
+        createdAt: prevCreatedAt,
         updatedAt: now
-      }, { merge: true });
+      });
+      // ^ NO `merge: true` — this fully replaces the doc while
+      //   preserving createdAt manually.
+
       return { id: docId, updated: true };
     } else {
-      // CREATE
+      // ---- CREATE ----
       await ref.set({
-        ...payload,
-        uid: userId,
+        // Replace-mode fields
+        vehicles:  payload.vehicles  || {},
+        boys:      payload.boys      || [],
+        expenses:  payload.expenses  || {},
+
+        // Aggregates
+        girlsCount:   payload.girlsCount   ?? 0,
+        girlsFarePer: payload.girlsFarePer ?? 0,
+        girlsTotal:   payload.girlsTotal   ?? 0,
+        boysTotal:    payload.boysTotal    ?? 0,
+        totalFare:    payload.totalFare    ?? 0,
+        toll:         payload.toll         ?? 0,
+        driver:       payload.driver       ?? 0,
+        net:          payload.net          ?? 0,
+
+        // Meta
+        uid:  userId,
         date: dateStr,
         createdAt: now,
         updatedAt: now
       });
+
       return { id: docId, updated: false };
     }
   } catch (err) {
@@ -371,14 +412,23 @@ async function deleteTodayTripSafe(userId, dateStr) {
 
 /* =====================================================
    PAST TRIPS — LEGACY SAVE (auto-generated ID)
-   Ye function tab use hoga jab user aaj ke ilawa
-   kisi purani date ka trip save kare (backfill).
    ===================================================== */
 async function saveTripSafe(userId, payload) {
   try {
     const docRef = await db.collection(COL_TRIPS).add({
-      ...payload,
-      uid: userId,
+      vehicles:  payload.vehicles  || {},
+      boys:      payload.boys      || [],
+      expenses:  payload.expenses  || {},
+      girlsCount:   payload.girlsCount   ?? 0,
+      girlsFarePer: payload.girlsFarePer ?? 0,
+      girlsTotal:   payload.girlsTotal   ?? 0,
+      boysTotal:    payload.boysTotal    ?? 0,
+      totalFare:    payload.totalFare    ?? 0,
+      toll:         payload.toll         ?? 0,
+      driver:       payload.driver       ?? 0,
+      net:          payload.net          ?? 0,
+      date:      payload.date,
+      uid:       userId,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp()
     });
@@ -405,7 +455,6 @@ async function deleteTripSafe(tripId) {
 async function deleteTripsBulkSafe(tripIds = []) {
   if (!Array.isArray(tripIds) || !tripIds.length) return 0;
 
-  // Firestore batch limit = 500
   const chunks = [];
   for (let i = 0; i < tripIds.length; i += 450) {
     chunks.push(tripIds.slice(i, i + 450));
@@ -483,13 +532,11 @@ window.__ff = {
   db,
   FieldValue,
 
-  // Collections
   COL_USERS,
   COL_ADMINS,
   COL_CONFIGS,
   COL_TRIPS,
 
-  // Users & Admins
   registerUserSafe,
   isAdmin,
   hasAnyAdmin,
@@ -498,29 +545,23 @@ window.__ff = {
   listAdmins,
   listAllUsers,
 
-  // Trips
   cleanupOldTrips,
   loadTripsSafe,
   saveTripSafe,
   deleteTripSafe,
   deleteTripsBulkSafe,
 
-  // Today's entry (upsert)
   todayDocId,
   saveTodayTripSafe,
   loadTodayTripSafe,
   deleteTodayTripSafe,
 
-  // Config
   loadUserConfigSafe,
   saveUserConfigSafe,
 
-  // Constants
   DEFAULT_VEHICLES,
   DEFAULT_BATCHES,
-
-  // Super admin emails (editable from console if needed)
   SUPER_ADMIN_EMAILS
 };
 
-console.log('%c🚀 FareFlow Firebase ready (v2)', 'color:#f6d365;font-weight:bold;');
+console.log('%c🚀 FareFlow Firebase ready (v3.0)', 'color:#f6d365;font-weight:bold;');

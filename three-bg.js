@@ -1,13 +1,14 @@
 /* =====================================================
    THREE.JS BACKGROUND — FUTURISTIC ROAD + REALISTIC BUS
    =====================================================
-   v2.1 FIXES:
-   • Bus transparency bug fixed (removed unsupported
-     'transmission' prop on r128, fixed glass material)
-   • Theme-aware scene: dark→lights ON, light→lights OFF
-   • Buildings fully visible in light theme
-   • Smooth fade transitions on theme switch
-   • Materials stored in refs for runtime toggling
+   v3.0 UPDATES:
+   • "24 EXPRESS" text on bus (side + front destination)
+   • Blurry immersive headlights (dark mode) — soft glow
+     halos + wider beam spread for realistic feel
+   • Light mode: realistic grass + trees on road sides
+   • Buildings more visible in light mode (brighter)
+   • Preserved: theme toggle, stars, shooting stars,
+     poles, dashes, camera modes
    ===================================================== */
 
 (function initThree() {
@@ -35,6 +36,8 @@
     skyBottom:     0x1a1228,
     fogColor:      0x1a1228,
 
+    busLabel:      '24 EXPRESS',   // ← Text shown on bus
+
     pixelRatioMax: 2,
     enableShadows: false,
   };
@@ -51,11 +54,6 @@
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setClearColor(0x000000, 0);
 
-  if (CONFIG.enableShadows && !isMobile) {
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  }
-
   const scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2(CONFIG.fogColor, 0.014);
 
@@ -63,7 +61,7 @@
   camera.position.set(0, 4.5, 14);
 
   /* =====================================================
-     LIGHTING — store refs for theme toggling
+     LIGHTING
      ===================================================== */
   const ambient = new THREE.AmbientLight(0x8090b0, 0.55);
   scene.add(ambient);
@@ -278,7 +276,108 @@
   });
 
   /* =====================================================
-     ROADSIDE — Light poles (store glow sprites for toggle)
+     🌿 GRASS + 🌲 TREES (visible mainly in light mode)
+     Grass ground plane on both sides of road
+     ===================================================== */
+  const grassGroup = new THREE.Group();
+  scene.add(grassGroup);
+
+  // Grass ground material (theme-aware)
+  const grassMat = new THREE.MeshStandardMaterial({
+    color: 0x4a7a3a,     // natural green
+    roughness: 0.95,
+    metalness: 0.0,
+    transparent: true,
+    opacity: 0.0          // start hidden (dark theme)
+  });
+
+  // Left + right grass strips
+  const grassStripWidth = 60;
+  [-1, 1].forEach(side => {
+    const grassGeo = new THREE.PlaneGeometry(grassStripWidth, ROAD_LENGTH);
+    const grass = new THREE.Mesh(grassGeo, grassMat.clone());
+    grass.rotation.x = -Math.PI / 2;
+    grass.position.set(
+      side * (ROAD_WIDTH / 2 + grassStripWidth / 2 + 0.5),
+      0.005,
+      -ROAD_LENGTH / 2 + 20
+    );
+    grassGroup.add(grass);
+    grass.userData.isGrassStrip = true;
+  });
+
+  /* ---------- Trees — simple cone + trunk ---------- */
+  const treeTrunkMat = new THREE.MeshStandardMaterial({
+    color: 0x5a3d1e,
+    roughness: 0.95,
+    metalness: 0.0,
+    transparent: true,
+    opacity: 0.0
+  });
+  const treeLeafMat = new THREE.MeshStandardMaterial({
+    color: 0x2f6b2a,
+    roughness: 0.85,
+    metalness: 0.05,
+    transparent: true,
+    opacity: 0.0
+  });
+
+  const trunkGeo = new THREE.CylinderGeometry(0.18, 0.24, 1.4, 6);
+  const leafGeo = new THREE.ConeGeometry(1.2, 2.8, 7);
+
+  const treeMeshes = [];
+  const treeSpacing = 12;
+  const treeCount = Math.ceil(ROAD_LENGTH / treeSpacing);
+
+  for (let i = 0; i < treeCount; i++) {
+    const z = 20 - i * treeSpacing;
+    [-1, 1].forEach(side => {
+      // Skip some randomly for organic feel
+      if (Math.random() < 0.25) return;
+
+      const treeGroup = new THREE.Group();
+
+      const trunk = new THREE.Mesh(trunkGeo, treeTrunkMat);
+      trunk.position.y = 0.7;
+      treeGroup.add(trunk);
+
+      const leaf = new THREE.Mesh(leafGeo, treeLeafMat);
+      leaf.position.y = 2.3;
+      treeGroup.add(leaf);
+
+      // Random scale for variety
+      const s = 0.8 + Math.random() * 0.6;
+      treeGroup.scale.set(s, s, s);
+
+      // Position away from road (behind light poles)
+      const distFromRoad = ROAD_WIDTH / 2 + 2.5 + Math.random() * 6;
+      treeGroup.position.set(
+        side * distFromRoad,
+        0,
+        z + (Math.random() - 0.5) * treeSpacing * 0.6
+      );
+
+      grassGroup.add(treeGroup);
+      treeMeshes.push({ group: treeGroup, side });
+    });
+  }
+
+  // Helper: set grass + tree opacity (theme-driven)
+  function setVegetationOpacity(level) {
+    grassGroup.children.forEach(child => {
+      if (child.userData.isGrassStrip) {
+        child.material.opacity = 0.95 * level;
+      }
+    });
+    treeTrunkMat.opacity = 1.0 * level;
+    treeLeafMat.opacity = 1.0 * level;
+    treeMeshes.forEach(t => {
+      t.group.visible = level > 0.05;
+    });
+  }
+
+  /* =====================================================
+     ROADSIDE — Light poles
      ===================================================== */
   const polesGroup = new THREE.Group();
   scene.add(polesGroup);
@@ -305,8 +404,8 @@
   const poleSpacing = 18;
   const poleCount = Math.ceil(ROAD_LENGTH / poleSpacing);
   const polesData = [];
-  const poleGlowSprites = [];   // for theme toggle
-  const poleHeadMeshes = [];    // for theme toggle
+  const poleGlowSprites = [];
+  const poleHeadMeshes = [];
 
   for (let i = 0; i < poleCount; i++) {
     const z = 20 - i * poleSpacing;
@@ -339,27 +438,25 @@
 
   /* =====================================================
      CITY SKYLINE — buildings + windows
-     (buildings group + window materials stored for theme toggle)
      ===================================================== */
   const cityGroup = new THREE.Group();
   scene.add(cityGroup);
 
   const cityBuildingGeo = new THREE.BoxGeometry(1, 1, 1);
 
-  // Building body material (dark silhouette — used in dark theme)
   const cityBuildingMat = new THREE.MeshStandardMaterial({
     color: 0x0f0d1a, roughness: 0.95, metalness: 0.1,
     emissive: 0x1a1030, emissiveIntensity: 0.15
   });
 
-  // Light-theme version (brighter concrete)
+  // Light-theme version (brighter concrete — more visible)
   const cityBuildingMatLight = new THREE.MeshStandardMaterial({
-    color: 0x8a7c68, roughness: 0.85, metalness: 0.15,
+    color: 0xa89678, roughness: 0.82, metalness: 0.1,
     emissive: 0x000000, emissiveIntensity: 0
   });
 
-  const windowMaterials = [];   // collect all window materials so we can fade them
-  const buildingMeshes = [];    // store refs so we can swap material on theme
+  const windowMaterials = [];
+  const buildingMeshes = [];
 
   const buildingCount = isMobile ? 30 : 55;
   for (let i = 0; i < buildingCount; i++) {
@@ -369,12 +466,11 @@
     const b = new THREE.Mesh(cityBuildingGeo, cityBuildingMat);
     b.scale.set(w, h, d);
     const side = Math.random() < 0.5 ? -1 : 1;
-    const distX = (ROAD_WIDTH / 2) + 25 + Math.random() * 60;
+    const distX = (ROAD_WIDTH / 2) + 30 + Math.random() * 60;
     b.position.set(side * distX, h / 2 - 2, -80 - Math.random() * 140);
     cityGroup.add(b);
     buildingMeshes.push(b);
 
-    // Window dots
     const windowMat = new THREE.MeshBasicMaterial({
       color: Math.random() < 0.7 ? 0xffd27a : 0x7ab8ff,
       transparent: true, opacity: 0.85,
@@ -402,61 +498,32 @@
   }
 
   /* =====================================================
-     🚌 BUS — FIXED MATERIALS (no transmission, proper opacity)
+     🚌 BUS — with "24 EXPRESS" label + blurry headlights
      ===================================================== */
   function createBus() {
     const bus = new THREE.Group();
 
-    /* ---------- Materials (r128-compatible) ---------- */
+    /* ---------- Materials ---------- */
     const bodyMat = new THREE.MeshStandardMaterial({
-      color: 0xe8e4d8,
-      roughness: 0.32,
-      metalness: 0.55,
-      transparent: false,
-      depthWrite: true
+      color: 0xe8e4d8, roughness: 0.32, metalness: 0.55
     });
-
     const accentMat = new THREE.MeshStandardMaterial({
-      color: CONFIG.goldDeep,
-      roughness: 0.35,
-      metalness: 0.85,
-      transparent: false,
-      depthWrite: true
+      color: CONFIG.goldDeep, roughness: 0.35, metalness: 0.85
     });
-
     const darkMat = new THREE.MeshStandardMaterial({
-      color: 0x14141a,
-      roughness: 0.55,
-      metalness: 0.4,
-      transparent: false,
-      depthWrite: true
+      color: 0x14141a, roughness: 0.55, metalness: 0.4
     });
-
-    /* Glass — FIX: no transmission, subtle opacity, proper depthWrite */
     const glassMat = new THREE.MeshStandardMaterial({
-      color: 0x0a1420,
-      roughness: 0.15,
-      metalness: 0.55,
-      transparent: true,
-      opacity: 0.92,
-      depthWrite: true
+      color: 0x0a1420, roughness: 0.15, metalness: 0.55,
+      transparent: true, opacity: 0.92, depthWrite: true
     });
-
     const rubberMat = new THREE.MeshStandardMaterial({
-      color: 0x0a0a0a,
-      roughness: 0.9,
-      metalness: 0.1,
-      transparent: false
+      color: 0x0a0a0a, roughness: 0.9, metalness: 0.1
     });
-
     const rimMat = new THREE.MeshStandardMaterial({
-      color: 0xb0b0b8,
-      roughness: 0.25,
-      metalness: 0.9,
-      transparent: false
+      color: 0xb0b0b8, roughness: 0.25, metalness: 0.9
     });
 
-    /* Emissive (light) materials — these toggle with theme */
     const headlightMat = new THREE.MeshBasicMaterial({ color: 0xfff3c4 });
     const taillightMat = new THREE.MeshBasicMaterial({ color: 0xff2a2a });
     const destBoardMat = new THREE.MeshBasicMaterial({ color: 0xffbb33 });
@@ -494,7 +561,7 @@
     acTop.position.set(0, FLOOR_Y + H + 0.5, -1.5);
     bus.add(acTop);
 
-    /* ---------- Side windows (inset to avoid z-fight) ---------- */
+    /* ---------- Side windows ---------- */
     const winGeo = new THREE.PlaneGeometry(1.05, 1.15);
     const winCount = 6;
     const winStartZ = -L / 2 + 1.2;
@@ -504,7 +571,6 @@
       const z = winStartZ + i * winSpacing;
       [-1, 1].forEach(side => {
         const w = new THREE.Mesh(winGeo, glassMat);
-        // slight inset (0.015) to prevent z-fighting with body
         w.position.set(side * (W / 2 - 0.015), FLOOR_Y + H * 0.62, z);
         w.rotation.y = side * Math.PI / 2;
         bus.add(w);
@@ -523,6 +589,101 @@
     rw.position.set(0, FLOOR_Y + H * 0.65, -L / 2 + 0.015);
     rw.rotation.y = Math.PI;
     bus.add(rw);
+
+    /* =====================================================
+       📝 "24 EXPRESS" LABEL (side of bus, on the body)
+       Canvas texture applied as overlay plane
+       ===================================================== */
+    function makeLabelTexture(text, opts = {}) {
+      const c = document.createElement('canvas');
+      c.width = 1024;
+      c.height = 256;
+      const ctx = c.getContext('2d');
+
+      // Transparent background
+      ctx.clearRect(0, 0, c.width, c.height);
+
+      // Optional background band
+      if (opts.band) {
+        const grad = ctx.createLinearGradient(0, 0, c.width, 0);
+        grad.addColorStop(0, 'rgba(20,20,26,0.0)');
+        grad.addColorStop(0.2, 'rgba(20,20,26,0.85)');
+        grad.addColorStop(0.8, 'rgba(20,20,26,0.85)');
+        grad.addColorStop(1, 'rgba(20,20,26,0.0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, c.height * 0.15, c.width, c.height * 0.7);
+      }
+
+      // Gold accent line (top + bottom of band)
+      if (opts.band) {
+        ctx.fillStyle = '#f6d365';
+        ctx.fillRect(0, c.height * 0.15, c.width, 6);
+        ctx.fillRect(0, c.height * 0.85 - 6, c.width, 6);
+      }
+
+      // Text
+      ctx.font = `bold ${opts.fontSize || 160}px 'Cinzel', 'Georgia', serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = opts.color || '#f6d365';
+      ctx.shadowColor = 'rgba(246, 211, 101, 0.9)';
+      ctx.shadowBlur = 30;
+      ctx.fillText(text, c.width / 2, c.height / 2 + 4);
+
+      // Second pass for stronger glow
+      ctx.shadowBlur = 15;
+      ctx.fillStyle = '#fff8d5';
+      ctx.font = `bold ${(opts.fontSize || 160) - 8}px 'Cinzel', 'Georgia', serif`;
+      ctx.fillText(text, c.width / 2, c.height / 2 + 4);
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.anisotropy = 4;
+      return tex;
+    }
+
+    // Side label (both sides) — mid-height on body
+    const sideLabelTex = makeLabelTexture(CONFIG.busLabel, {
+      fontSize: 150,
+      band: true,
+      color: '#f6d365'
+    });
+    const sideLabelMat = new THREE.MeshBasicMaterial({
+      map: sideLabelTex,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      opacity: 0.95
+    });
+    const sideLabelGeo = new THREE.PlaneGeometry(6, 1.5);
+
+    [-1, 1].forEach(side => {
+      const label = new THREE.Mesh(sideLabelGeo, sideLabelMat);
+      // Place on the side of the body, slightly above windows
+      label.position.set(
+        side * (W / 2 + 0.005),
+        FLOOR_Y + H * 0.28,           // lower half of body
+        0
+      );
+      label.rotation.y = side > 0 ? Math.PI / 2 : -Math.PI / 2;
+      bus.add(label);
+    });
+
+    // Front destination board label
+    const frontLabelTex = makeLabelTexture(CONFIG.busLabel, {
+      fontSize: 130,
+      color: '#ffbb33'
+    });
+    const frontLabelMat = new THREE.MeshBasicMaterial({
+      map: frontLabelTex,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      opacity: 0.95
+    });
+    const frontLabelGeo = new THREE.PlaneGeometry(2.2, 0.5);
+    const frontLabel = new THREE.Mesh(frontLabelGeo, frontLabelMat);
+    frontLabel.position.set(0, FLOOR_Y + H - 0.35, L / 2 + 0.06);
+    bus.add(frontLabel);
 
     /* ---------- Front bumper + grill ---------- */
     const bumperGeo = new THREE.BoxGeometry(W + 0.05, 0.35, 0.35);
@@ -543,41 +704,88 @@
       bus.add(strip);
     }
 
-    /* ---------- Headlights ---------- */
-    const headGeo = new THREE.CircleGeometry(0.22, 16);
-    [-0.85, 0.85].forEach(x => {
+    /* ---------- Headlights (glow halo handles blur) ---------- */
+    const headGeo = new THREE.CircleGeometry(0.22, 20);
+    const headlightPositions = [-0.85, 0.85];
+    const headlightSprites = [];
+
+    // Create blurry glow texture for headlights
+    const headGlowCanvas = document.createElement('canvas');
+    headGlowCanvas.width = headGlowCanvas.height = 128;
+    const hgc = headGlowCanvas.getContext('2d');
+    const hg = hgc.createRadialGradient(64, 64, 0, 64, 64, 64);
+    hg.addColorStop(0,   'rgba(255,250,220,1)');
+    hg.addColorStop(0.15,'rgba(255,240,180,0.95)');
+    hg.addColorStop(0.4, 'rgba(255,220,120,0.55)');
+    hg.addColorStop(0.7, 'rgba(255,180,80,0.20)');
+    hg.addColorStop(1,   'rgba(255,150,50,0)');
+    hgc.fillStyle = hg;
+    hgc.fillRect(0, 0, 128, 128);
+    const headGlowTex = new THREE.CanvasTexture(headGlowCanvas);
+
+    headlightPositions.forEach(x => {
+      // Solid circle (the lamp itself)
       const h = new THREE.Mesh(headGeo, headlightMat);
       h.position.set(x, FLOOR_Y + 0.55, L / 2 + 0.05);
       bus.add(h);
 
+      // Chrome ring
       const ring = new THREE.Mesh(
         new THREE.RingGeometry(0.22, 0.28, 20),
         rimMat
       );
       ring.position.set(x, FLOOR_Y + 0.55, L / 2 + 0.052);
       bus.add(ring);
+
+      // Blurry halo sprite (BIG, soft) — makes the light look
+      // foggy / immersive, especially in dark theme
+      const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: headGlowTex,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        opacity: 0.9
+      }));
+      halo.scale.set(3.4, 3.4, 1);
+      halo.position.set(x, FLOOR_Y + 0.55, L / 2 + 0.15);
+      bus.add(halo);
+      headlightSprites.push(halo);
+
+      // EXTRA wide soft glow behind (even blurrier)
+      const soft = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: headGlowTex,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        opacity: 0.5
+      }));
+      soft.scale.set(6.5, 6.5, 1);
+      soft.position.set(x, FLOOR_Y + 0.55, L / 2 + 0.25);
+      bus.add(soft);
+      headlightSprites.push(soft);
     });
 
     /* ---------- Taillights + glow sprites ---------- */
     const tailGeo = new THREE.PlaneGeometry(0.35, 0.22);
     const tailSprites = [];
+
+    const redCanvas = document.createElement('canvas');
+    redCanvas.width = redCanvas.height = 64;
+    const rc = redCanvas.getContext('2d');
+    const rg = rc.createRadialGradient(32, 32, 0, 32, 32, 32);
+    rg.addColorStop(0, 'rgba(255,60,60,1)');
+    rg.addColorStop(0.4, 'rgba(255,30,30,0.45)');
+    rg.addColorStop(1, 'rgba(255,0,0,0)');
+    rc.fillStyle = rg;
+    rc.fillRect(0, 0, 64, 64);
+    const redTex = new THREE.CanvasTexture(redCanvas);
+
     [-1.05, 1.05].forEach(x => {
       const t = new THREE.Mesh(tailGeo, taillightMat);
       t.position.set(x, FLOOR_Y + 0.55, -L / 2 - 0.02);
       t.rotation.y = Math.PI;
       bus.add(t);
 
-      // Reuse glowCanvas gradient (red version)
-      const redCanvas = document.createElement('canvas');
-      redCanvas.width = redCanvas.height = 64;
-      const rc = redCanvas.getContext('2d');
-      const rg = rc.createRadialGradient(32, 32, 0, 32, 32, 32);
-      rg.addColorStop(0, 'rgba(255,60,60,1)');
-      rg.addColorStop(0.4, 'rgba(255,30,30,0.45)');
-      rg.addColorStop(1, 'rgba(255,0,0,0)');
-      rc.fillStyle = rg;
-      rc.fillRect(0, 0, 64, 64);
-      const redTex = new THREE.CanvasTexture(redCanvas);
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
         map: redTex, transparent: true, blending: THREE.AdditiveBlending,
         depthWrite: false, opacity: 0.9
@@ -587,20 +795,6 @@
       bus.add(sprite);
       tailSprites.push(sprite);
     });
-
-    /* ---------- Destination board ---------- */
-    const destGeo = new THREE.PlaneGeometry(W - 0.5, 0.4);
-    const dest = new THREE.Mesh(destGeo, destBoardMat);
-    dest.position.set(0, FLOOR_Y + H - 0.35, L / 2 + 0.02);
-    bus.add(dest);
-    for (let i = 0; i < 6; i++) {
-      const letter = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.14, 0.14),
-        new THREE.MeshBasicMaterial({ color: 0x2a1a00 })
-      );
-      letter.position.set(-1 + i * 0.4, FLOOR_Y + H - 0.35, L / 2 + 0.025);
-      bus.add(letter);
-    }
 
     /* ---------- Side mirrors ---------- */
     const mirrorArmGeo = new THREE.BoxGeometry(0.05, 0.05, 0.5);
@@ -655,19 +849,19 @@
       wheels.push(w);
     });
 
-    /* ---------- Headlight BEAM ---------- */
-    const beamGeo = new THREE.ConeGeometry(2.6, 12, 24, 1, true);
+    /* ---------- Headlight BEAM (wider + softer) ---------- */
+    const beamGeo = new THREE.ConeGeometry(3.4, 14, 28, 1, true);
     const beamMat = new THREE.MeshBasicMaterial({
       color: 0xffe194,
       transparent: true,
-      opacity: 0.14,
+      opacity: 0.16,
       side: THREE.DoubleSide,
       blending: THREE.AdditiveBlending,
       depthWrite: false
     });
     const beam = new THREE.Mesh(beamGeo, beamMat);
     beam.rotation.x = Math.PI / 2;
-    beam.position.set(0, FLOOR_Y + 0.5, L / 2 + 6);
+    beam.position.set(0, FLOOR_Y + 0.5, L / 2 + 7);
     bus.add(beam);
 
     /* ---------- Under-glow ---------- */
@@ -684,7 +878,7 @@
     underGlow.position.y = 0.02;
     bus.add(underGlow);
 
-    /* ---------- Refs for animation + theme toggle ---------- */
+    /* ---------- Refs ---------- */
     bus.userData = {
       wheels,
       beam,
@@ -693,13 +887,19 @@
       taillightMat,
       destBoardMat,
       tailSprites,
+      headlightSprites,        // ← new: for theme toggle
+      sideLabelMat,            // ← new: for theme toggle
+      frontLabelMat,           // ← new: for theme toggle
       baseY: 0,
       bouncePhase: Math.random() * Math.PI * 2,
-      // Baseline opacities for theme fading
       baseline: {
-        beam: 0.14,
+        beam: 0.16,
         underGlow: 0.18,
-        tailSprite: 0.9
+        tailSprite: 0.9,
+        headHalo: 0.9,
+        headSoft: 0.5,
+        sideLabel: 0.95,
+        frontLabel: 0.95
       }
     };
 
@@ -741,13 +941,10 @@
 
   /* =====================================================
      🎨 THEME-AWARE SCENE CONTROLLER
-     =====================================================
-     Dark theme  → lights ON, buildings dim silhouette
-     Light theme → lights OFF, buildings fully visible
      ===================================================== */
   const themeState = {
-    current: 'dark',      // 'dark' | 'light'
-    lightLevel: 1,        // 0 = lights OFF, 1 = lights ON (smoothly interpolated)
+    current: 'dark',
+    lightLevel: 1,
     targetLevel: 1,
   };
 
@@ -756,84 +953,90 @@
     themeState.current = isLight ? 'light' : 'dark';
     themeState.targetLevel = isLight ? 0 : 1;
 
-    // ---- Background clear-color & fog ----
+    // Fog + sky
     if (isLight) {
-      scene.fog.color.set(0xd8cfbc);
-      scene.fog.density = 0.008;
+      scene.fog.color.set(0xe8e0cc);
+      scene.fog.density = 0.006;
     } else {
       scene.fog.color.set(CONFIG.fogColor);
       scene.fog.density = 0.014;
     }
 
-    // ---- Sky colors ----
     if (isLight) {
-      skyMat.uniforms.uTop.value.set(0xdfe6f5);
-      skyMat.uniforms.uBottom.value.set(0xfaf2e0);
+      skyMat.uniforms.uTop.value.set(0x88b8e8);
+      skyMat.uniforms.uBottom.value.set(0xfaf0d8);
     } else {
       skyMat.uniforms.uTop.value.set(CONFIG.skyTop);
       skyMat.uniforms.uBottom.value.set(CONFIG.skyBottom);
     }
 
-    // ---- Stars fade out in light theme ----
     starPoints.visible = !isLight;
 
-    // ---- Lighting ----
-    ambient.intensity = isLight ? 0.95 : 0.55;
+    // Lighting — brighter, warmer for light mode
+    ambient.intensity = isLight ? 1.15 : 0.55;
     ambient.color.set(isLight ? 0xffffff : 0x8090b0);
 
-    hemi.intensity = isLight ? 0.85 : 0.45;
+    hemi.intensity = isLight ? 1.05 : 0.45;
     hemi.color.set(isLight ? 0xffffff : CONFIG.skyTop);
     hemi.groundColor.set(isLight ? 0xd8cfbc : CONFIG.roadBase);
 
-    keyLight.intensity = isLight ? 0.35 : 0.85;
-    keyLight.color.set(isLight ? 0xffffff : 0xffc460);
+    keyLight.intensity = isLight ? 0.65 : 0.85;
+    keyLight.color.set(isLight ? 0xfff4d8 : 0xffc460);
 
-    fillLight.intensity = isLight ? 0.55 : 0.35;
+    fillLight.intensity = isLight ? 0.6 : 0.35;
 
-    // ---- Buildings: swap material for light theme ----
+    // Buildings
     buildingMeshes.forEach(b => {
       b.material = isLight ? cityBuildingMatLight : cityBuildingMat;
     });
 
-    // ---- Window lights fade off in light theme ----
+    // Window lights
     windowMaterials.forEach(m => {
       m.userData = m.userData || {};
-      if (m.userData.targetOpacity === undefined) {
-        m.userData.targetOpacity = 0.85;
-      }
       m.userData.targetOpacity = isLight ? 0.0 : 0.85;
-      m.userData.transitioning = animate;
     });
 
-    // ---- Road glow elements ----
-    gridPlaneMat.opacity = isLight ? 0.10 : 0.35;
-    dashMat.opacity = isLight ? 0.25 : 0.85;
-    edgeMat.opacity = isLight ? 0.20 : 0.55;
+    // Road glow
+    gridPlaneMat.opacity = isLight ? 0.08 : 0.35;
+    dashMat.opacity = isLight ? 0.30 : 0.85;
+    edgeMat.opacity = isLight ? 0.25 : 0.55;
 
-    // ---- Pole heads & glows ----
+    // Pole lights
     poleHeadMat.color.set(isLight ? 0x555555 : 0xffe194);
     poleGlowSprites.forEach(s => {
       s.userData = s.userData || {};
       s.userData.targetOpacity = isLight ? 0.0 : 0.9;
     });
 
-    // ---- Bus lights (baseline targets) ----
-    // We'll lerp these in animate() using themeState.lightLevel
+    // Bus lights
     bus.userData.headlightMat.color.set(isLight ? 0x555555 : 0xfff3c4);
     bus.userData.taillightMat.color.set(isLight ? 0x552222 : 0xff2a2a);
     bus.userData.destBoardMat.color.set(isLight ? 0x554422 : 0xffbb33);
+
+    // Bus side/front labels: gold glow ON in dark, subdued in light
+    bus.userData.sideLabelMat.userData = bus.userData.sideLabelMat.userData || {};
+    bus.userData.sideLabelMat.userData.targetOpacity = isLight ? 0.35 : 0.95;
+
+    bus.userData.frontLabelMat.userData = bus.userData.frontLabelMat.userData || {};
+    bus.userData.frontLabelMat.userData.targetOpacity = isLight ? 0.35 : 0.95;
+
+    // Vegetation (grass + trees) — visible only in light mode
+    // We invert lightLevel for vegetation: 0 → 1 when light theme
+    // Set a flag; will be applied in updateThemeTransition()
+    grassGroup.userData = grassGroup.userData || {};
+    grassGroup.userData.targetOpacity = isLight ? 1 : 0;
   }
 
-  // Smoothly lerp lightLevel toward targetLevel each frame
   function updateThemeTransition(dt) {
-    const speed = 4.0;   // higher = faster transition
+    const speed = 4.0;
     const diff = themeState.targetLevel - themeState.lightLevel;
     if (Math.abs(diff) > 0.001) {
       themeState.lightLevel += diff * Math.min(1, dt * speed);
     } else {
       themeState.lightLevel = themeState.targetLevel;
     }
-    const L = themeState.lightLevel;
+    const L = themeState.lightLevel;              // 1 = dark theme, 0 = light theme
+    const vegetationLevel = 1 - L;                // 1 = light theme, 0 = dark theme
 
     // Bus beam
     bus.userData.beam.material.opacity = bus.userData.baseline.beam * L;
@@ -849,6 +1052,21 @@
       s.visible = L > 0.02;
     });
 
+    // Bus headlight halos (the blurry immersive glow)
+    bus.userData.headlightSprites.forEach((s, i) => {
+      // i%2 == 0 → main halo, i%2 == 1 → soft wide halo
+      const baseOpacity = (i % 2 === 0)
+        ? bus.userData.baseline.headHalo
+        : bus.userData.baseline.headSoft;
+      s.material.opacity = baseOpacity * L;
+      s.visible = L > 0.02;
+    });
+
+    // Bus labels
+    const sideTarget = bus.userData.sideLabelMat.userData?.targetOpacity ?? 0.95;
+    bus.userData.sideLabelMat.opacity = sideTarget * (L * 0.9 + 0.1); // slightly visible in light too
+    bus.userData.frontLabelMat.opacity = (bus.userData.frontLabelMat.userData?.targetOpacity ?? 0.95) * (L * 0.9 + 0.1);
+
     // Pole glows
     poleGlowSprites.forEach(s => {
       const target = s.userData?.targetOpacity ?? 0.9;
@@ -856,15 +1074,17 @@
       s.visible = (target * L) > 0.02;
     });
 
-    // Window materials
+    // Windows
     windowMaterials.forEach(m => {
       const target = m.userData?.targetOpacity ?? 0.85;
       m.opacity = target * L;
       m.visible = (target * L) > 0.02;
     });
+
+    // Vegetation (grass + trees)
+    setVegetationOpacity(vegetationLevel);
   }
 
-  // Detect initial theme
   const detectInitialTheme = () => {
     const saved = localStorage.getItem('ff-theme') || 'system';
     if (saved === 'system') {
@@ -874,7 +1094,6 @@
   };
   applyThemeToScene(detectInitialTheme(), false);
 
-  // Watch for theme changes on <html data-theme="...">
   const themeObserver = new MutationObserver(mutations => {
     for (const m of mutations) {
       if (m.attributeName === 'data-theme') {
@@ -953,16 +1172,27 @@
       w.rotation.x -= wheelSpeed * dt;
     });
 
-    /* ---- Beam flicker (only when lights on) ---- */
+    /* ---- Beam + halo flicker (only when lights on) ---- */
     const L = themeState.lightLevel;
     if (L > 0.05) {
+      const flicker = 0.9 + 0.1 * Math.sin(time * 8.3);
       bus.userData.beam.material.opacity =
-        (0.12 + 0.02 * Math.sin(time * 8.3)) * L;
+        (0.13 + 0.03 * Math.sin(time * 6.4)) * L;
       bus.userData.underGlow.material.opacity =
         (0.16 + 0.04 * Math.sin(time * 2.5)) * L;
+
+      // Headlight halos pulse very subtly
+      bus.userData.headlightSprites.forEach((s, i) => {
+        const baseOpacity = (i % 2 === 0)
+          ? bus.userData.baseline.headHalo
+          : bus.userData.baseline.headSoft;
+        const phase = (i * 0.7) + time * 1.3;
+        const pulse = 0.94 + 0.06 * Math.sin(phase);
+        s.material.opacity = baseOpacity * L * pulse;
+      });
     }
 
-    /* ---- Speed streaks (only visible in dark theme) ---- */
+    /* ---- Speed streaks (dark theme only) ---- */
     streakMat.opacity = 0.65 * L;
     streaks.forEach(s => {
       s.line.position.z -= s.speed * dt;
@@ -1041,11 +1271,11 @@
   }, { passive: true });
 
   /* =====================================================
-     CANVAS OPACITY (theme-aware)
+     CANVAS OPACITY
      ===================================================== */
   const applyCanvasOpacity = () => {
     const theme = document.documentElement.dataset.theme;
-    canvas.style.opacity = theme === 'light' ? '0.55' : '0.95';
+    canvas.style.opacity = theme === 'light' ? '0.65' : '0.95';
   };
   applyCanvasOpacity();
   new MutationObserver(applyCanvasOpacity).observe(document.documentElement, {
