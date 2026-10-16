@@ -1,5 +1,13 @@
 /* =====================================================
-   FAREFLOW — SERVICE WORKER (PWA) v4.0.0
+   FAREFLOW — SERVICE WORKER (PWA) v4.2.0
+   =====================================================
+   v4.2.0 UPDATES:
+   • Cache version bumped (v4.0.0 → v4.2.0) so users
+     receive the new CSS/JS/HTML automatically
+   • Auto-reload open tabs when a new version activates
+   • Preserved: everything from v4.0.0
+
+   v4.0.0:
    • Global shared data model support
    • Cache-first for static assets
    • Network-first for Firebase / API calls
@@ -10,7 +18,7 @@
    • Auto-cleanup old caches on activate
    ===================================================== */
 
-const CACHE_VERSION = 'fareflow-v4.0.0';
+const CACHE_VERSION = 'fareflow-v4.2.0';
 const STATIC_CACHE  = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 
@@ -29,12 +37,14 @@ const PRECACHE_URLS = [
   'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'
 ];
 
-/* ---------- INSTALL ---------- */
+/* =====================================================
+   INSTALL
+   ===================================================== */
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(STATIC_CACHE)
       .then(cache => {
-        // Use individual add() calls so one bad URL doesn't break the whole precache
+        // Individual add() calls so one bad URL doesn't break the whole precache
         return Promise.allSettled(
           PRECACHE_URLS.map(url =>
             cache.add(new Request(url, { cache: 'reload' }))
@@ -46,7 +56,14 @@ self.addEventListener('install', event => {
   );
 });
 
-/* ---------- ACTIVATE ---------- */
+/* =====================================================
+   ACTIVATE
+   =====================================================
+   • Deletes old caches
+   • Takes control of open clients
+   • (New) Notifies open tabs to reload once so they
+     pick up the fresh HTML/CSS/JS
+   ===================================================== */
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys =>
@@ -58,11 +75,33 @@ self.addEventListener('activate', event => {
             return caches.delete(k);
           })
       )
-    ).then(() => self.clients.claim())
+    )
+    .then(() => self.clients.claim())
+    .then(() => {
+      /* Notify all open tabs that a new version is live.
+         app.js listens for this and can reload gracefully.
+         If no listener exists, we still call clients.claim()
+         so future navigations use the new SW. */
+      return self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+        .then(clients => {
+          clients.forEach(client => {
+            try {
+              client.postMessage({ type: 'SW_UPDATED', version: CACHE_VERSION });
+            } catch (e) { /* ignore */ }
+          });
+        });
+    })
   );
 });
 
-/* ---------- FETCH STRATEGY ---------- */
+/* =====================================================
+   FETCH STRATEGY
+   =====================================================
+   • Skip non-GET and non-http(s)
+   • Skip Firebase / Google APIs (auth must hit network)
+   • HTML navigations → network-first, fallback to cache
+   • Static assets → stale-while-revalidate
+   ===================================================== */
 self.addEventListener('fetch', event => {
   const req = event.request;
   const url = new URL(req.url);
@@ -120,12 +159,16 @@ self.addEventListener('fetch', event => {
   );
 });
 
-/* ---------- MESSAGE: force update ---------- */
+/* =====================================================
+   MESSAGE — force update
+   ===================================================== */
 self.addEventListener('message', event => {
   if (event.data === 'SKIP_WAITING') self.skipWaiting();
 });
 
-/* ---------- OPTIONAL: notification click (future use) ---------- */
+/* =====================================================
+   OPTIONAL: notification click (future use)
+   ===================================================== */
 self.addEventListener('notificationclick', event => {
   event.notification.close();
   event.waitUntil(

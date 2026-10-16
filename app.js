@@ -1,10 +1,13 @@
 /* =====================================================
-   FAREFLOW — MAIN APP LOGIC v4.0
+   FAREFLOW — MAIN APP LOGIC v4.2
    =====================================================
-   • Global SHARED data (config + trips)
+   • Global SHARED data (vehicles/batches/boys + trips)
+   • PER-USER layout (each admin has own layout)
    • Real-time sync (Firestore onSnapshot)
    • Toast notifications on remote changes
-   • Layout customization (card blur / opacity)
+   • Layout customization (card blur / opacity / color)
+   • ANDROID FIX: solid card bg layer + range slider
+   • AUTO-INVERSE TEXT (mix-blend-mode: difference)
    • Directional sub-tab slide animations
    • Staggered card entry (immersive)
    • Tab indicator centering fix
@@ -20,7 +23,7 @@
    • PWA install prompt
    • Confirm modal
    • Admin management tab
-   • Layout sub-tab (new)
+   • Layout sub-tab (per-admin)
    ===================================================== */
 
 /* =====================================================
@@ -30,19 +33,26 @@ const state = {
   user: null,
   isAdminUser: false,
 
-  /* Shared data */
+  /* Shared data (vehicles / batches / boys) */
   vehicles: [],
   batches: [],
   boysMaster: [],
+
+  /* PER-USER layout — loaded from users/{uid}.layout */
   layout: {
-    darkBlur: 22,
-    lightBlur: 18,
-    darkOpacity: 0.06,
-    lightOpacity: 0.55,
+    darkBlur: 28,
+    lightBlur: 24,
+    darkOpacity: 0.82,
+    lightOpacity: 0.90,
     darkSaturate: 160,
-    lightSaturate: 160,
+    lightSaturate: 140,
     cardRadius: 18,
-    shadowDepth: 0.5
+    shadowDepth: 0.55,
+    darkBgHex: '#0a0a0f',
+    lightBgHex: '#ffffff',
+    autoInvertText: true,
+    forceSolidBg: false,
+    androidSolidFallback: true
   },
 
   trip: {
@@ -69,7 +79,8 @@ const state = {
   unsubscribers: {
     config: null,
     trips: null,
-    today: null
+    today: null,
+    layout: null
   },
 
   /* Toast debounce for remote changes */
@@ -140,6 +151,38 @@ function editorInfo() {
     email,
     name:  u.displayName || email.split('@')[0] || 'Admin'
   };
+}
+
+/* =====================================================
+   HEX → RGBA helper (mirrors firebase.js hexToRgb)
+   ===================================================== */
+function hexToRgba(hex, alpha) {
+  const h = String(hex || '').replace('#', '').trim();
+  let r = 255, g = 255, b = 255;
+  if (h.length === 3) {
+    r = parseInt(h[0] + h[0], 16);
+    g = parseInt(h[1] + h[1], 16);
+    b = parseInt(h[2] + h[2], 16);
+  } else if (h.length === 6) {
+    r = parseInt(h.substring(0, 2), 16);
+    g = parseInt(h.substring(2, 4), 16);
+    b = parseInt(h.substring(4, 6), 16);
+  }
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/* =====================================================
+   ANDROID DETECTION (for solid bg fallback)
+   ===================================================== */
+function isAndroid() {
+  return /android/i.test(navigator.userAgent || '');
+}
+
+/* Detect if backdrop-filter is actually supported (not just parsed) */
+function supportsBackdropFilter() {
+  if (typeof CSS === 'undefined' || !CSS.supports) return false;
+  return CSS.supports('backdrop-filter', 'blur(1px)') ||
+         CSS.supports('-webkit-backdrop-filter', 'blur(1px)');
 }
 
 /* =====================================================
@@ -329,6 +372,10 @@ function applyTheme(mode, animate = true) {
     resolved = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   }
   document.documentElement.dataset.theme = resolved;
+
+  /* Re-apply layout with new theme-specific values */
+  applyLayoutToCSS(state.layout);
+
   requestAnimationFrame(() => {
     positionIndicator($('#main-tabs'), '.tab-indicator', '.tab.active');
     positionIndicator($('#entry-subtabs'), '.subtab-indicator', '.subtab.active');
@@ -342,6 +389,16 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', ()
 
 /* =====================================================
    APPLY LAYOUT — CSS variables for card blur / opacity
+   =====================================================
+   Sets:
+   • --blur              backdrop blur px
+   • --glass-sat         backdrop saturation %
+   • --radius            card corner radius
+   • --shadow-depth      shadow multiplier
+   • --card-bg-hex       base color (dark/light)
+   • --card-bg-opacity   base alpha
+   • --card-solid-layer  rgba() — solid fallback for Android
+   • --auto-invert       'difference' or 'normal'
    ===================================================== */
 function applyLayoutToCSS(layout) {
   const L = { ...state.layout, ...(layout || {}) };
@@ -352,24 +409,46 @@ function applyLayoutToCSS(layout) {
 
   const blur     = isLight ? L.lightBlur    : L.darkBlur;
   const opacity  = isLight ? L.lightOpacity : L.darkOpacity;
-  const saturate = isLight ? L.lightSaturate : L.darkSaturate;
+  const saturate = isLight ? L.lightSaturate: L.darkSaturate;
+  const bgHex    = isLight ? L.lightBgHex   : L.darkBgHex;
 
-  root.style.setProperty('--blur',          blur + 'px');
-  root.style.setProperty('--glass-bg',      `rgba(255,255,255,${opacity})`);
-  root.style.setProperty('--glass-sat',     saturate + '%');
-  root.style.setProperty('--radius',        (L.cardRadius || 18) + 'px');
+  root.style.setProperty('--blur',        blur + 'px');
+  root.style.setProperty('--glass-sat',   saturate + '%');
+  root.style.setProperty('--radius',      (L.cardRadius || 18) + 'px');
+  root.style.setProperty('--card-bg-hex', bgHex);
+  root.style.setProperty('--card-bg-opacity', String(opacity));
 
-  /* shadow depth — scale the base shadow */
+  /* Determine effective opacity for the SOLID layer.
+     If backdrop-filter is unsupported (or forceSolidBg), we need
+     a stronger solid layer so text stays readable on Android. */
+  let solidOpacity = opacity;
+  const bfSupported = supportsBackdropFilter();
+  const forceSolid = !!L.forceSolidBg;
+  const androidFallback = !!L.androidSolidFallback && isAndroid();
+
+  if (forceSolid || !bfSupported) {
+    solidOpacity = Math.min(1, opacity + 0.15);
+  } else if (androidFallback) {
+    /* Android with partial backdrop-filter support → boost a bit */
+    solidOpacity = Math.min(1, opacity + 0.05);
+  }
+
+  const solidLayer = hexToRgba(bgHex, solidOpacity);
+  root.style.setProperty('--card-solid-layer', solidLayer);
+  root.style.setProperty('--glass-bg', hexToRgba(bgHex, opacity));
+
+  /* Keep old light-theme value working too (some rules still reference it) */
+  root.style.setProperty('--card-bg', hexToRgba(bgHex, opacity));
+
+  /* Shadow depth */
   const depth = Math.max(0, Math.min(1.5, L.shadowDepth ?? 0.5));
   root.style.setProperty('--shadow-depth', depth.toFixed(2));
-}
 
-/* Re-apply layout when theme changes */
-const _origApplyTheme = applyTheme;
-applyTheme = function (mode, animate = true) {
-  _origApplyTheme(mode, animate);
-  applyLayoutToCSS(state.layout);
-};
+  /* Auto-inverse text toggle */
+  const invert = L.autoInvertText === false ? 'normal' : 'difference';
+  root.style.setProperty('--auto-invert', invert);
+  root.style.setProperty('--invert-enabled', L.autoInvertText === false ? '0' : '1');
+}
 
 /* =====================================================
    SLIDING TAB INDICATOR — FIXED CENTERING
@@ -385,11 +464,9 @@ function positionIndicator(container, indicatorSel, activeSel) {
   const containerStyle = window.getComputedStyle(container);
   const padLeft = parseFloat(containerStyle.paddingLeft) || 0;
 
-  /* Position relative to container's padding box */
   const left  = aRect.left - cRect.left - padLeft;
   const width = aRect.width;
 
-  /* Use `left` (not transform) so animation feels perfectly centered */
   ind.style.width = width + 'px';
   ind.style.transform = `translateX(${left}px)`;
   ind.classList.add('ready');
@@ -418,12 +495,9 @@ function initTabs() {
     }, 100);
   }, { passive: true });
 
-  /* Disable horizontal swipe on subtabs (finger gesture) */
   [entrySubs, settingsSubs].forEach(container => {
     if (!container) return;
 
-    /* Kill horizontal swipes: allow vertical scroll of page, but block
-       the container from being "dragged" by touch. */
     let startX = 0, startY = 0, scrolling = false;
 
     container.addEventListener('touchstart', e => {
@@ -440,17 +514,15 @@ function initTabs() {
 
       if (!scrolling) {
         if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8) {
-          /* Horizontal drag on the tabs bar — block it */
           e.preventDefault();
           return;
         }
         if (Math.abs(dy) > 8) {
-          scrolling = true; // let page scroll
+          scrolling = true;
         }
       }
     }, { passive: false });
 
-    /* Keep indicator aligned after programmatic scrollIntoView */
     container.addEventListener('scroll', () => {
       positionIndicator(container, '.subtab-indicator', '.subtab.active');
     }, { passive: true });
@@ -458,10 +530,9 @@ function initTabs() {
 }
 
 /* =====================================================
-   DIRECTIONAL SUB-TAB SWITCHING (immersive slide)
+   DIRECTIONAL SUB-TAB SWITCHING
    ===================================================== */
 function switchSubtab(group, key) {
-  /* group = 'entry' | 'settings' */
   const order = state.subtabOrder[group];
   const prevKey = state.subtabOrder.current[group];
   if (key === prevKey) return;
@@ -472,44 +543,34 @@ function switchSubtab(group, key) {
 
   state.subtabOrder.current[group] = key;
 
-  /* Determine panel IDs */
   const prefix = group === 'entry' ? 'entry-subtab-' : 'settings-subtab-';
   const containerId = group === 'entry' ? 'entry-subtabs' : 'settings-subtabs';
   const subtabsNav = $('#' + containerId);
 
-  /* Update active class on subtab buttons */
   if (subtabsNav) {
     $$(`#${containerId} .subtab`).forEach(t => {
       t.classList.toggle('active', t.dataset.subtab === key);
     });
   }
 
-  /* Hide all panels in this group, activate new one */
   const oldPanel = $('#' + prefix + prevKey);
   const newPanel = $('#' + prefix + key);
 
   if (oldPanel) oldPanel.classList.remove('active');
 
   if (newPanel) {
-    /* Directional + stagger classes */
     newPanel.classList.remove('slide-from-left', 'slide-from-right');
     newPanel.classList.add(forward ? 'slide-from-left' : 'slide-from-right');
     newPanel.classList.add('active');
 
-    /* Remove directional class after animation finishes */
     setTimeout(() => {
       newPanel.classList.remove('slide-from-left', 'slide-from-right');
     }, 700);
   }
 
-  /* Reposition indicator after DOM settles */
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      positionIndicator(
-        subtabsNav,
-        '.subtab-indicator',
-        '.subtab.active'
-      );
+      positionIndicator(subtabsNav, '.subtab-indicator', '.subtab.active');
     });
   });
 }
@@ -649,29 +710,37 @@ function cleanAuthError(err) {
    BOOTSTRAP USER
    ===================================================== */
 async function bootstrapUser(user) {
-  /* 1) Load shared config once */
+  /* 1) Load shared config (vehicles/batches/boys only) */
   boot.set(82, 'Loading shared config…');
   const cfg = await loadGlobalConfigSafe();
   state.vehicles   = cfg.vehicles;
   state.batches    = cfg.batches;
   state.boysMaster = cfg.boys;
-  state.layout     = cfg.layout || state.layout;
+
+  /* 2) Load PERSONAL layout from users/{uid}.layout */
+  boot.set(84, 'Loading your layout…');
+  try {
+    const personalLayout = await loadUserLayoutSafe(user.uid);
+    state.layout = { ...state.layout, ...personalLayout };
+  } catch (e) {
+    console.warn('Layout load failed, using defaults:', e);
+  }
   applyLayoutToCSS(state.layout);
 
-  /* 2) Initial trips load */
+  /* 3) Initial trips load */
   boot.set(88, 'Loading trips…');
   state.trips = await loadAllTripsSafe(3, 300);
 
-  /* 3) Cleanup old trips */
+  /* 4) Cleanup old trips */
   boot.set(92, 'Cleaning old data…');
   const removed = await cleanupOldTrips(3);
   if (removed > 0) toast(`🧹 ${removed} purane trips delete kiye (3+ months)`);
 
-  /* 4) Load today's entry */
+  /* 5) Load today's entry */
   boot.set(95, 'Loading today\'s entry…');
   await loadTodayIntoForm();
 
-  /* 5) Initial renders */
+  /* 6) Initial renders */
   boot.set(97, 'Rendering…');
   renderVehicles();
   renderBatchTabs();
@@ -684,11 +753,11 @@ async function bootstrapUser(user) {
   updateSummary();
   renderLayoutControls();
 
-  /* 6) Bind events */
+  /* 7) Bind events */
   bindStaticEvents();
   initTabs();
 
-  /* 7) Attach real-time listeners */
+  /* 8) Attach real-time listeners */
   attachAllListeners();
 
   const adminsTab = $('#admins-tab-btn');
@@ -703,24 +772,20 @@ async function bootstrapUser(user) {
 function attachAllListeners() {
   detachAllListeners();
 
-  /* --- CONFIG --- */
+  /* --- SHARED CONFIG (vehicles / batches / boys) --- */
   state.unsubscribers.config = subscribeToConfig((cfg, meta) => {
-    /* Update state */
     state.vehicles   = cfg.vehicles;
     state.batches    = cfg.batches;
     state.boysMaster = cfg.boys;
-    state.layout     = cfg.layout || state.layout;
 
-    /* Apply layout to CSS */
-    applyLayoutToCSS(state.layout);
+    /* NOTE: layout is NOT part of shared config anymore —
+       it lives in users/{uid}.layout (see below). */
 
-    /* Show toast if not from us */
     if (!meta.isInitial && meta.updatedBy && meta.updatedBy !== state.user?.uid) {
       const who = meta.updatedByName || 'Admin';
       remoteToast(who, 'ne config update kiya');
     }
 
-    /* Re-render dependent UI (only if not initial) */
     if (!meta.isInitial) {
       renderVehicles();
       renderBatchTabs();
@@ -730,15 +795,29 @@ function attachAllListeners() {
       renderBoysList();
       renderExpenses();
       updateSummary();
-      renderLayoutControls();
     }
   });
+
+  /* --- PERSONAL LAYOUT (users/{uid}.layout) --- */
+  if (state.user?.uid) {
+    state.unsubscribers.layout = subscribeToUserLayout(state.user.uid, (layout, meta) => {
+      state.layout = { ...state.layout, ...layout };
+      applyLayoutToCSS(state.layout);
+
+      if (!meta.isInitial) {
+        renderLayoutControls();
+        /* Toast only if the change came from another device/tab */
+        if (meta.layoutUpdatedAt) {
+          /* Silent — layout sync across devices is expected */
+        }
+      }
+    });
+  }
 
   /* --- RECENT TRIPS --- */
   state.unsubscribers.trips = subscribeToRecentTrips((trips, meta) => {
     state.trips = trips;
     if (!meta.isInitial) {
-      /* No toast — trips silently refresh */
       renderHistory($('#history-search')?.value || '');
     }
   }, 3, 300);
@@ -751,11 +830,6 @@ function attachAllListeners() {
       remoteToast(who, 'ne aaj ki entry update ki');
     }
     if (!meta.isInitial && trip && state.trip.date === today) {
-      /* Update form silently from remote without wiping local edits
-         that haven't been saved yet — we only refresh if the user
-         is not actively editing (no dirty flag). We'll keep it simple:
-         reload the trip into the form only if the entry wasn't the one
-         we just saved (based on our own lastSavedAt). */
       const myEmail = state.user?.email;
       if (trip.updatedByEmail && trip.updatedByEmail !== myEmail) {
         mergeTripIntoForm(trip);
@@ -820,7 +894,6 @@ function mergeTripIntoForm(todayTrip) {
     };
   });
 
-  /* Update form UI */
   const dEl = $('#trip-date');
   if (dEl) dEl.value = state.trip.date;
 
@@ -829,7 +902,6 @@ function mergeTripIntoForm(todayTrip) {
   const gpEl = $('#girls-fare-per');
   if (gpEl) gpEl.value = state.trip.girlsFarePer;
 
-  /* Re-render conditional areas */
   renderVehicles();
   renderExpenses();
   renderBoysList();
@@ -873,12 +945,12 @@ function bindStaticEvents() {
     });
   });
 
-  /* ENTRY SUB-TABS — directional switch */
+  /* ENTRY SUB-TABS */
   $$('#entry-subtabs .subtab').forEach(st => st.onclick = () => {
     switchSubtab('entry', st.dataset.subtab);
   });
 
-  /* SETTINGS SUB-TABS — directional switch */
+  /* SETTINGS SUB-TABS */
   $$('#settings-subtabs .subtab').forEach(st => st.onclick = () => {
     switchSubtab('settings', st.dataset.subtab);
     if (st.dataset.subtab === 'admins' && state.isAdminUser) refreshAdminsTab();
@@ -895,7 +967,6 @@ function bindStaticEvents() {
     dateEl.value = state.trip.date;
     dateEl.onchange = async e => {
       state.trip.date = e.target.value || todayISO();
-      /* Swap today's listener if date changed */
       if (state.unsubscribers.today) {
         try { state.unsubscribers.today(); } catch (err) {}
         state.unsubscribers.today = null;
@@ -903,7 +974,6 @@ function bindStaticEvents() {
       const trip = await loadTripByDateSafe(state.trip.date);
       if (trip) mergeTripIntoForm(trip);
       else resetTripForm();
-      /* Re-attach today listener (only meaningful for today) */
       if (state.trip.date === todayISO()) {
         state.unsubscribers.today = subscribeToTodayTrip(todayISO(), (t, meta) => {
           if (!meta.isInitial && t && meta.updatedBy !== state.user?.uid) {
@@ -1014,94 +1084,154 @@ function bindStaticEvents() {
 }
 
 /* =====================================================
-   LAYOUT TAB — sliders + live preview
+   LAYOUT TAB — sliders + live preview (PER-USER)
    ===================================================== */
 function renderLayoutControls() {
   const L = state.layout;
 
   const setVal = (id, v) => { const el = $(id); if (el) el.value = v; };
   const setTxt = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+  const setChk = (id, v) => { const el = $(id); if (el) el.checked = !!v; };
 
-  setVal('#layout-dark-blur',  L.darkBlur);
+  /* ---- Sliders (dark theme) ---- */
+  setVal('#layout-dark-blur', L.darkBlur);
+  setVal('#layout-dark-op',   L.darkOpacity);
+  setVal('#layout-dark-sat',  L.darkSaturate);
+
+  setTxt('#layout-dark-blur-val', L.darkBlur + 'px');
+  setTxt('#layout-dark-op-val',   Number(L.darkOpacity).toFixed(2));
+  setTxt('#layout-dark-sat-val',  L.darkSaturate + '%');
+
+  /* ---- Sliders (light theme) ---- */
   setVal('#layout-light-blur', L.lightBlur);
-  setVal('#layout-dark-op',    L.darkOpacity);
   setVal('#layout-light-op',   L.lightOpacity);
-  setVal('#layout-dark-sat',   L.darkSaturate);
   setVal('#layout-light-sat',  L.lightSaturate);
-  setVal('#layout-radius',     L.cardRadius);
-  setVal('#layout-shadow',     L.shadowDepth);
 
-  setTxt('#layout-dark-blur-val',  L.darkBlur + 'px');
   setTxt('#layout-light-blur-val', L.lightBlur + 'px');
-  setTxt('#layout-dark-op-val',    L.darkOpacity.toFixed(2));
-  setTxt('#layout-light-op-val',   L.lightOpacity.toFixed(2));
-  setTxt('#layout-dark-sat-val',   L.darkSaturate + '%');
+  setTxt('#layout-light-op-val',   Number(L.lightOpacity).toFixed(2));
   setTxt('#layout-light-sat-val',  L.lightSaturate + '%');
-  setTxt('#layout-radius-val',     L.cardRadius + 'px');
-  setTxt('#layout-shadow-val',     L.shadowDepth.toFixed(2));
+
+  /* ---- Shape & depth ---- */
+  setVal('#layout-radius', L.cardRadius);
+  setVal('#layout-shadow', L.shadowDepth);
+
+  setTxt('#layout-radius-val', L.cardRadius + 'px');
+  setTxt('#layout-shadow-val', Number(L.shadowDepth).toFixed(2));
+
+  /* ---- Color pickers (dark + light background) ---- */
+  const darkHex  = L.darkBgHex  || '#0a0a0f';
+  const lightHex = L.lightBgHex || '#ffffff';
+
+  setVal('#layout-dark-bg',  darkHex);
+  setVal('#layout-light-bg', lightHex);
+
+  setTxt('#layout-dark-bg-val',  darkHex);
+  setTxt('#layout-light-bg-val', lightHex);
+
+  /* ---- Toggles (auto-invert + Android fallback + force solid) ---- */
+  const autoInvert    = L.autoInvertText !== false;
+  const androidSolid  = L.androidSolidFallback !== false;
+  const forceSolid    = L.forceSolidBg === true;
+
+  setChk('#layout-auto-invert',   autoInvert);
+  setChk('#layout-android-solid', androidSolid);
+  setChk('#layout-force-solid',   forceSolid);
+
+  setTxt('#layout-auto-invert-val',   autoInvert   ? 'ON' : 'OFF');
+  setTxt('#layout-android-solid-val', androidSolid ? 'ON' : 'OFF');
+  setTxt('#layout-force-solid-val',   forceSolid   ? 'ON' : 'OFF');
 }
 
 function bindLayoutControls() {
+  /* Collect current values from all controls into a layout object */
+  const collect = () => ({
+    darkBlur:     +$('#layout-dark-blur')?.value  || 22,
+    lightBlur:    +$('#layout-light-blur')?.value || 18,
+    darkOpacity:  +$('#layout-dark-op')?.value    || 0.06,
+    lightOpacity: +$('#layout-light-op')?.value   || 0.55,
+    darkSaturate: +$('#layout-dark-sat')?.value   || 160,
+    lightSaturate:+$('#layout-light-sat')?.value  || 160,
+    cardRadius:   +$('#layout-radius')?.value     || 18,
+    shadowDepth:  +$('#layout-shadow')?.value     || 0.5,
+    darkBgHex:    $('#layout-dark-bg')?.value     || '#0a0a0f',
+    lightBgHex:   $('#layout-light-bg')?.value    || '#ffffff',
+    autoInvertText:       !!$('#layout-auto-invert')?.checked,
+    androidSolidFallback: !!$('#layout-android-solid')?.checked,
+    forceSolidBg:         !!$('#layout-force-solid')?.checked
+  });
+
+  /* Live update on any control change */
   const onChange = () => {
-    const L = {
-      darkBlur:     +$('#layout-dark-blur')?.value  || 22,
-      lightBlur:    +$('#layout-light-blur')?.value || 18,
-      darkOpacity:  +$('#layout-dark-op')?.value    || 0.06,
-      lightOpacity: +$('#layout-light-op')?.value   || 0.55,
-      darkSaturate: +$('#layout-dark-sat')?.value   || 160,
-      lightSaturate:+$('#layout-light-sat')?.value  || 160,
-      cardRadius:   +$('#layout-radius')?.value     || 18,
-      shadowDepth:  +$('#layout-shadow')?.value     || 0.5
-    };
+    const L = collect();
     applyLayoutToCSS(L);
     renderLayoutControls();
   };
 
-  ['#layout-dark-blur', '#layout-light-blur',
-   '#layout-dark-op',   '#layout-light-op',
-   '#layout-dark-sat',  '#layout-light-sat',
-   '#layout-radius',    '#layout-shadow'
+  [
+    '#layout-dark-blur', '#layout-light-blur',
+    '#layout-dark-op',   '#layout-light-op',
+    '#layout-dark-sat',  '#layout-light-sat',
+    '#layout-radius',    '#layout-shadow',
+    '#layout-dark-bg',   '#layout-light-bg',
+    '#layout-auto-invert','#layout-android-solid',
+    '#layout-force-solid'
   ].forEach(sel => {
     const el = $(sel);
-    if (el) el.oninput = onChange;
+    if (!el) return;
+    el.addEventListener('input', onChange);
+    el.addEventListener('change', onChange);
   });
 
+  /* Save → per-user */
   const saveBtn = $('#layout-save');
   if (saveBtn) saveBtn.onclick = async () => {
+    if (!state.user?.uid) return toast('Login required');
     saveBtn.disabled = true;
+    const original = saveBtn.textContent;
     saveBtn.textContent = '⏳ Saving…';
     try {
-      const ok = await saveLayoutSafe(state.layout, editorInfo());
+      const L = collect();
+      state.layout = { ...state.layout, ...L };
+      applyLayoutToCSS(state.layout);
+      const ok = await saveUserLayoutSafe(state.user.uid, state.layout);
       if (ok) {
-        toast('✅ Layout saved (shared with all admins)');
+        toast('✅ Layout saved (only for your account)');
       } else {
         toast('❌ Save failed');
       }
     } finally {
       saveBtn.disabled = false;
-      saveBtn.textContent = '💾 Save Layout';
+      saveBtn.textContent = original || '💾 Save Layout';
     }
   };
 
+  /* Reset → defaults (per-user) */
   const resetBtn = $('#layout-reset');
   if (resetBtn) resetBtn.onclick = async () => {
+    if (!state.user?.uid) return toast('Login required');
     const ok = await confirmDialog(
       'Reset Layout',
-      'Sab layout settings default pe wapis chali jayengi. Confirm?',
+      'Aapki layout settings default pe wapis chali jayengi. Confirm?',
       'Reset'
     );
     if (!ok) return;
+
     const D = {
-      darkBlur: 22, lightBlur: 18,
-      darkOpacity: 0.06, lightOpacity: 0.55,
-      darkSaturate: 160, lightSaturate: 160,
-      cardRadius: 18, shadowDepth: 0.5
+      darkBlur: 28, lightBlur: 24,
+      darkOpacity: 0.82, lightOpacity: 0.90,
+      darkSaturate: 160, lightSaturate: 140,
+      cardRadius: 18, shadowDepth: 0.55,
+      darkBgHex: '#0a0a0f',
+      lightBgHex: '#ffffff',
+      autoInvertText: true,
+      forceSolidBg: false,
+      androidSolidFallback: true
     };
-    state.layout = D;
+    state.layout = { ...D };
     applyLayoutToCSS(D);
     renderLayoutControls();
-    await saveLayoutSafe(D, editorInfo());
-    toast('↩️ Layout reset');
+    await saveUserLayoutSafe(state.user.uid, D);
+    toast('↩️ Layout reset (your account)');
   };
 }
 
@@ -1606,7 +1736,6 @@ async function saveTrip() {
   const btn = $('#save-trip');
   if (btn) btn.disabled = true;
 
-  /* Prevent the remote-toast listener from firing for our own save */
   state.suppressRemoteToast = true;
   setTimeout(() => { state.suppressRemoteToast = false; }, 2500);
 
@@ -1660,8 +1789,6 @@ async function saveTrip() {
     toast(result.updated ? '✅ Entry updated!' : '✅ Trip saved!');
     updateSaveHint();
 
-    /* Refresh trips list locally (onSnapshot will also do it, but for
-       snappier UX we update here) */
     state.trips = await loadAllTripsSafe(3, 300);
     renderHistory();
 
@@ -2046,17 +2173,16 @@ async function persistBoysMaster() {
 
 /* =====================================================
    SETTINGS — GLOBAL CONFIG PERSISTENCE
+   (vehicles / batches / boys ONLY — layout is per-user)
    ===================================================== */
 async function persistGlobalConfig() {
-  /* Suppress remote toast for our own save */
   state.suppressRemoteToast = true;
   setTimeout(() => { state.suppressRemoteToast = false; }, 2000);
 
   await saveGlobalConfigSafe({
     vehicles: state.vehicles,
     batches:  state.batches,
-    boys:     state.boysMaster,
-    layout:   state.layout
+    boys:     state.boysMaster
   }, editorInfo());
 }
 

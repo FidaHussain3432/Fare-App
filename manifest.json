@@ -72,6 +72,19 @@
           "type": "image/png"
         }
       ]
+    },
+    {
+      "name": "Layout Settings",
+      "short_name": "Layout",
+      "url": "./?tab=settings&sub=layout",
+      "description": "Apna card layout customize karein",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     }
   ]
 }

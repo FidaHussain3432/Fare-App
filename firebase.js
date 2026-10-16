@@ -13,7 +13,7 @@ const firebaseConfig = {
 };
 
 /* =====================================================
-   INITIALIZE FIREBASE (compat mode for <script> tags)
+   INITIALIZE FIREBASE (compat mode)
    ===================================================== */
 firebase.initializeApp(firebaseConfig);
 
@@ -44,20 +44,21 @@ db.enablePersistence({ synchronizeTabs: true }).catch(err => {
 /* =====================================================
    COLLECTIONS REFERENCE
    =====================================================
-   users      → { uid, email, createdAt, lastLogin }
+   users      → { uid, email, createdAt, lastLogin, layout }
    admins     → { uid, email, grantedAt, grantedBy }
-   configs    → { global: { vehicles, batches, boys, layout, ... } }
+   configs    → { global: { vehicles, batches, boys, ... } }
    trips      → { "YYYY-MM-DD": { vehicles, boys, expenses, ... } }
-   
-   NOTE: Ab config aur trips GLOBAL hain (shared by all admins).
-   Har admin wahi data dekhega aur edit karega.
+
+   NOTE:
+   • configs/global → shared (vehicles, batches, boys)
+   • users/{uid}.layout → PERSONAL (each admin's own layout)
+   • trips/{date} → shared by all admins
    ===================================================== */
 const COL_USERS   = 'users';
 const COL_ADMINS  = 'admins';
 const COL_CONFIGS = 'configs';
 const COL_TRIPS   = 'trips';
 
-/* Global config doc IDs */
 const GLOBAL_CONFIG_DOC = 'global';
 
 /* =====================================================
@@ -67,16 +68,53 @@ const DEFAULT_VEHICLES = ['Bus', 'Mini Bus', 'Coaster Bus', 'Van', 'Carry'];
 const DEFAULT_BATCHES  = ['24', '25', '26'];
 const DEFAULT_BOYS     = [];
 
-/* Default layout settings (customizable via Layout tab) */
+/* =====================================================
+   DEFAULT LAYOUT (PER-ADMIN)
+   =====================================================
+   FIXES:
+   • Card backgrounds are now MORE SOLID by default
+   • Dark theme: blackish card (darkBgHex: #0a0a0f) with high opacity
+   • Light theme: white card with high opacity
+   • Blur is stronger so bus animation gets properly blurred
+   • autoInvertText enables mix-blend-mode: difference on text
+   • Platform-safe values for Android
+   ===================================================== */
 const DEFAULT_LAYOUT = {
-  darkBlur:     22,      // px — card backdrop blur in dark theme
-  lightBlur:    18,      // px — card backdrop blur in light theme
-  darkOpacity:  0.06,    // 0–1 — card background opacity (dark)
-  lightOpacity: 0.55,    // 0–1 — card background opacity (light)
-  darkSaturate: 160,     // % — backdrop saturation
-  lightSaturate:160,
-  cardRadius:   18,      // px — border radius
-  shadowDepth:  0.5      // 0–1 — shadow intensity multiplier
+  /* Card backdrop blur (px) — stronger = less animation bleed */
+  darkBlur:     28,
+  lightBlur:    24,
+
+  /* Card background opacity (0–1) — higher = more solid */
+  darkOpacity:  0.82,
+  lightOpacity: 0.90,
+
+  /* Backdrop saturation (%) */
+  darkSaturate: 160,
+  lightSaturate:140,
+
+  /* Card border radius (px) */
+  cardRadius:   18,
+
+  /* Shadow depth multiplier (0–1.5) */
+  shadowDepth:  0.55,
+
+  /* ===== Card background base colors (hex) ===== */
+  darkBgHex:    '#0a0a0f',   // blackish (dark theme)
+  lightBgHex:   '#ffffff',   // pure white (light theme)
+
+  /* ===== Text auto-inverse (mix-blend-mode: difference) ===== */
+  autoInvertText: true,
+
+  /* ===== Platform fallback =====
+     If true, uses solid background instead of blur
+     Auto-enabled on Android if backdrop-filter fails */
+  forceSolidBg: false,
+
+  /* ===== Android-specific fallback =====
+     Android Chrome has partial backdrop-filter support.
+     When true, we add a solid color UNDER the blur layer
+     so text is always readable even if blur fails. */
+  androidSolidFallback: true
 };
 
 const SUPER_ADMIN_EMAILS = [
@@ -84,9 +122,29 @@ const SUPER_ADMIN_EMAILS = [
 ];
 
 /* =====================================================
-   USER REGISTRATION — called on every login
-   Saves/updates user record in `users` collection.
-   Super admin email → auto-grant. Bootstrap fallback.
+   HEX → RGBA helper
+   ===================================================== */
+function hexToRgb(hex) {
+  const h = String(hex || '').replace('#', '').trim();
+  if (h.length === 3) {
+    return {
+      r: parseInt(h[0] + h[0], 16),
+      g: parseInt(h[1] + h[1], 16),
+      b: parseInt(h[2] + h[2], 16)
+    };
+  }
+  if (h.length === 6) {
+    return {
+      r: parseInt(h.substring(0, 2), 16),
+      g: parseInt(h.substring(2, 4), 16),
+      b: parseInt(h.substring(4, 6), 16)
+    };
+  }
+  return { r: 255, g: 255, b: 255 };
+}
+
+/* =====================================================
+   USER REGISTRATION
    ===================================================== */
 async function registerUserSafe(user) {
   if (!user || !user.uid) return null;
@@ -104,7 +162,8 @@ async function registerUserSafe(user) {
         email: user.email || '',
         displayName: user.displayName || '',
         createdAt: now,
-        lastLogin: now
+        lastLogin: now,
+        layout: { ...DEFAULT_LAYOUT }
       });
     } else {
       await userRef.set({
@@ -113,9 +172,9 @@ async function registerUserSafe(user) {
       }, { merge: true });
     }
 
-    /* ---------- ADMIN BOOTSTRAP LOGIC ---------- */
+    /* ---------- ADMIN BOOTSTRAP ---------- */
 
-    // Case 1: Super-admin email list mein hai → auto-grant
+    // Case 1: Super-admin email → auto-grant
     if (SUPER_ADMIN_EMAILS.map(e => e.toLowerCase()).includes(emailLower)) {
       const already = await isAdmin(user.uid);
       if (!already) {
@@ -125,11 +184,11 @@ async function registerUserSafe(user) {
       return true;
     }
 
-    // Case 2: Koi bhi admin nahi hai → bootstrap admin
+    // Case 2: No admin exists → bootstrap
     const anyAdmin = await hasAnyAdmin();
     if (!anyAdmin) {
       await grantAdmin(user.uid, user.email, 'system-bootstrap');
-      console.log('👑 Bootstrap admin granted (no admin existed):', user.email);
+      console.log('👑 Bootstrap admin granted:', user.email);
     }
 
     return true;
@@ -159,12 +218,12 @@ async function hasAnyAdmin() {
     return !snap.empty;
   } catch (err) {
     console.warn('⚠️ hasAnyAdmin failed:', err.message);
-    return true; // safe default
+    return true;
   }
 }
 
 /* =====================================================
-   ADMIN MANAGEMENT — grant / revoke / list
+   ADMIN MANAGEMENT
    ===================================================== */
 async function grantAdmin(uid, email, grantedBy = 'unknown') {
   if (!uid) throw new Error('uid required');
@@ -208,7 +267,7 @@ async function listAdmins() {
 }
 
 /* =====================================================
-   USERS — list all registered users
+   USERS — list all
    ===================================================== */
 async function listAllUsers() {
   try {
@@ -227,25 +286,18 @@ async function listAllUsers() {
 }
 
 /* =====================================================
-   ============== GLOBAL CONFIG ========================
-   configs/global — single doc shared by all admins
+   GLOBAL CONFIG (vehicles / batches / boys)
+   NOTE: Layout is NOT stored here anymore — it's per-user.
    ===================================================== */
-
-/**
- * Load global config (vehicles, batches, boys, layout)
- * Returns object with defaults if not exists
- */
 async function loadGlobalConfigSafe() {
   try {
     const doc = await db.collection(COL_CONFIGS).doc(GLOBAL_CONFIG_DOC).get();
 
     if (!doc.exists) {
-      // Create with defaults
       const defaults = {
         vehicles:  [...DEFAULT_VEHICLES],
         batches:   [...DEFAULT_BATCHES],
         boys:      [...DEFAULT_BOYS],
-        layout:    { ...DEFAULT_LAYOUT },
         updatedAt: FieldValue.serverTimestamp(),
         updatedBy: 'system-bootstrap'
       };
@@ -253,8 +305,7 @@ async function loadGlobalConfigSafe() {
       return {
         vehicles: [...DEFAULT_VEHICLES],
         batches:  [...DEFAULT_BATCHES],
-        boys:     [],
-        layout:   { ...DEFAULT_LAYOUT }
+        boys:     []
       };
     }
 
@@ -265,7 +316,6 @@ async function loadGlobalConfigSafe() {
       batches:  Array.isArray(d.batches)  && d.batches.length
                 ? d.batches  : [...DEFAULT_BATCHES],
       boys:     Array.isArray(d.boys) ? d.boys : [],
-      layout:   { ...DEFAULT_LAYOUT, ...(d.layout || {}) },
       updatedAt: d.updatedAt || null,
       updatedBy: d.updatedBy || null,
       updatedByName: d.updatedByName || null
@@ -275,19 +325,11 @@ async function loadGlobalConfigSafe() {
     return {
       vehicles: [...DEFAULT_VEHICLES],
       batches:  [...DEFAULT_BATCHES],
-      boys:     [],
-      layout:   { ...DEFAULT_LAYOUT }
+      boys:     []
     };
   }
 }
 
-/**
- * Save global config (full or partial).
- * Automatically adds updatedBy / updatedAt for change tracking.
- *
- * @param {object} config         - { vehicles?, batches?, boys?, layout? }
- * @param {object} editorInfo     - { uid, email, name } — for tracking
- */
 async function saveGlobalConfigSafe(config, editorInfo = {}) {
   try {
     const payload = {
@@ -300,9 +342,6 @@ async function saveGlobalConfigSafe(config, editorInfo = {}) {
     if (Array.isArray(config.vehicles))  payload.vehicles  = config.vehicles;
     if (Array.isArray(config.batches))   payload.batches   = config.batches;
     if (Array.isArray(config.boys))      payload.boys      = config.boys;
-    if (config.layout && typeof config.layout === 'object') {
-      payload.layout = config.layout;
-    }
 
     await db.collection(COL_CONFIGS).doc(GLOBAL_CONFIG_DOC).set(payload, { merge: true });
     return true;
@@ -312,33 +351,6 @@ async function saveGlobalConfigSafe(config, editorInfo = {}) {
   }
 }
 
-/**
- * Save only layout settings (used by Layout tab)
- */
-async function saveLayoutSafe(layout, editorInfo = {}) {
-  try {
-    const payload = {
-      layout: { ...layout },
-      updatedAt: FieldValue.serverTimestamp(),
-      updatedBy: editorInfo.uid  || 'unknown',
-      updatedByEmail: editorInfo.email || '',
-      updatedByName:  editorInfo.name  || (editorInfo.email || '').split('@')[0] || 'Admin'
-    };
-    await db.collection(COL_CONFIGS).doc(GLOBAL_CONFIG_DOC).set(payload, { merge: true });
-    return true;
-  } catch (err) {
-    console.error('❌ Layout save failed:', err);
-    return false;
-  }
-}
-
-/**
- * Real-time subscription to global config.
- * Calls `onChange(config, meta)` whenever doc changes.
- * Returns unsubscribe function.
- *
- * meta = { isInitial, updatedBy, updatedByName, updatedByEmail, updatedAt }
- */
 function subscribeToConfig(onChange) {
   let isFirst = true;
 
@@ -352,8 +364,7 @@ function subscribeToConfig(onChange) {
                   ? d.vehicles : [...DEFAULT_VEHICLES],
         batches:  Array.isArray(d.batches)  && d.batches.length
                   ? d.batches  : [...DEFAULT_BATCHES],
-        boys:     Array.isArray(d.boys) ? d.boys : [],
-        layout:   { ...DEFAULT_LAYOUT, ...(d.layout || {}) }
+        boys:     Array.isArray(d.boys) ? d.boys : []
       };
 
       const meta = {
@@ -379,26 +390,66 @@ function subscribeToConfig(onChange) {
 }
 
 /* =====================================================
-   ============== SHARED TRIPS =========================
-   trips/{YYYY-MM-DD} — one trip per date, shared by all
+   PER-USER LAYOUT (users/{uid}.layout)
    ===================================================== */
-
-/**
- * Deterministic doc ID — now just the date (no uid prefix)
- */
-function todayDocId(dateStr) {
-  return dateStr;   // e.g., "2026-10-16"
+async function loadUserLayoutSafe(userId) {
+  if (!userId) return { ...DEFAULT_LAYOUT };
+  try {
+    const doc = await db.collection(COL_USERS).doc(userId).get();
+    if (!doc.exists) return { ...DEFAULT_LAYOUT };
+    const d = doc.data() || {};
+    return { ...DEFAULT_LAYOUT, ...(d.layout || {}) };
+  } catch (err) {
+    console.warn('⚠️ loadUserLayoutSafe failed:', err.message);
+    return { ...DEFAULT_LAYOUT };
+  }
 }
 
-/**
- * Save (upsert) trip for a given date.
- * Replaces vehicles / boys / expenses completely.
- * Adds updatedBy tracking.
- *
- * @param {string} dateStr       - "YYYY-MM-DD"
- * @param {object} payload       - { vehicles, boys, expenses, girlsCount, ... }
- * @param {object} editorInfo    - { uid, email, name } — for tracking
- */
+async function saveUserLayoutSafe(userId, layout) {
+  if (!userId) return false;
+  try {
+    await db.collection(COL_USERS).doc(userId).set({
+      layout: { ...layout },
+      layoutUpdatedAt: FieldValue.serverTimestamp()
+    }, { merge: true });
+    return true;
+  } catch (err) {
+    console.error('❌ saveUserLayoutSafe failed:', err);
+    return false;
+  }
+}
+
+function subscribeToUserLayout(userId, onChange) {
+  if (!userId) return () => {};
+
+  let isFirst = true;
+  const unsub = db.collection(COL_USERS).doc(userId)
+    .onSnapshot(snap => {
+      if (!snap.exists) return;
+      const d = snap.data() || {};
+      const layout = { ...DEFAULT_LAYOUT, ...(d.layout || {}) };
+      const meta = {
+        isInitial: isFirst,
+        layoutUpdatedAt: d.layoutUpdatedAt || null
+      };
+      isFirst = false;
+      try { onChange(layout, meta); } catch (e) {
+        console.error('subscribeToUserLayout onChange error:', e);
+      }
+    }, err => {
+      console.error('❌ subscribeToUserLayout error:', err);
+    });
+
+  return unsub;
+}
+
+/* =====================================================
+   SHARED TRIPS
+   ===================================================== */
+function todayDocId(dateStr) {
+  return dateStr;
+}
+
 async function saveTripByDateSafe(dateStr, payload, editorInfo = {}) {
   const docId = todayDocId(dateStr);
   const ref = db.collection(COL_TRIPS).doc(docId);
@@ -408,12 +459,10 @@ async function saveTripByDateSafe(dateStr, payload, editorInfo = {}) {
     const now = FieldValue.serverTimestamp();
 
     const baseData = {
-      // Replace-mode fields
       vehicles:  payload.vehicles  || {},
       boys:      payload.boys      || [],
       expenses:  payload.expenses  || {},
 
-      // Aggregates
       girlsCount:   payload.girlsCount   ?? 0,
       girlsFarePer: payload.girlsFarePer ?? 0,
       girlsTotal:   payload.girlsTotal   ?? 0,
@@ -423,7 +472,6 @@ async function saveTripByDateSafe(dateStr, payload, editorInfo = {}) {
       driver:       payload.driver       ?? 0,
       net:          payload.net          ?? 0,
 
-      // Meta
       date: dateStr,
       updatedAt: now,
       updatedBy:      editorInfo.uid   || 'unknown',
@@ -454,9 +502,6 @@ async function saveTripByDateSafe(dateStr, payload, editorInfo = {}) {
   }
 }
 
-/**
- * Load trip for a specific date (one-shot)
- */
 async function loadTripByDateSafe(dateStr) {
   try {
     const docId = todayDocId(dateStr);
@@ -469,9 +514,6 @@ async function loadTripByDateSafe(dateStr) {
   }
 }
 
-/**
- * Delete trip for a date
- */
 async function deleteTripByDateSafe(dateStr) {
   try {
     const docId = todayDocId(dateStr);
@@ -483,17 +525,12 @@ async function deleteTripByDateSafe(dateStr) {
   }
 }
 
-/**
- * Load recent trips (last N months) — one-shot.
- * Fetches all trips sorted by date desc, then client-side filters.
- */
 async function loadAllTripsSafe(monthsBack = 3, limit = 300) {
   const cutoff = new Date();
   cutoff.setMonth(cutoff.getMonth() - monthsBack);
   const cutoffISO = cutoff.toISOString().slice(0, 10);
 
   try {
-    // Try indexed query first
     let snap;
     try {
       snap = await db.collection(COL_TRIPS)
@@ -509,7 +546,6 @@ async function loadAllTripsSafe(monthsBack = 3, limit = 300) {
       .map(d => ({ id: d.id, ...d.data() }))
       .filter(t => (t.date || '') >= cutoffISO);
 
-    // Client-side sort (safety)
     trips.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     return trips;
   } catch (err) {
@@ -518,14 +554,6 @@ async function loadAllTripsSafe(monthsBack = 3, limit = 300) {
   }
 }
 
-/**
- * Real-time subscription to recent trips (last 3 months).
- * Calls `onChange(trips, meta)` whenever list changes.
- * Returns unsubscribe function.
- *
- * Note: Firestore can't filter by dynamic date range in onSnapshot easily,
- * so we fetch a reasonable limit and filter client-side.
- */
 function subscribeToRecentTrips(onChange, monthsBack = 3, limit = 300) {
   let isFirst = true;
 
@@ -553,7 +581,6 @@ function subscribeToRecentTrips(onChange, monthsBack = 3, limit = 300) {
       }
     }, err => {
       console.error('❌ subscribeToRecentTrips error:', err);
-      // Fallback: try without orderBy
       console.warn('⚠️ Retrying without orderBy…');
       db.collection(COL_TRIPS).limit(limit).onSnapshot(
         snap2 => {
@@ -567,10 +594,6 @@ function subscribeToRecentTrips(onChange, monthsBack = 3, limit = 300) {
   return unsub;
 }
 
-/**
- * Real-time subscription to today's trip only.
- * Calls `onChange(trip, meta)` when today's trip changes.
- */
 function subscribeToTodayTrip(dateStr, onChange) {
   let isFirst = true;
   const docId = todayDocId(dateStr);
@@ -597,7 +620,7 @@ function subscribeToTodayTrip(dateStr, onChange) {
 }
 
 /* =====================================================
-   AUTO-CLEANUP: Trips older than N months (GLOBAL)
+   AUTO-CLEANUP: Trips older than N months
    ===================================================== */
 async function cleanupOldTrips(monthsBack = 3) {
   const cutoff = new Date();
@@ -671,18 +694,13 @@ async function deleteTripsBulkSafe(tripIds = []) {
 }
 
 /* =====================================================
-   LEGACY / BACKWARD COMPAT SHIMS
-   Purane function names ko naye functions pe map kiya
-   taake app.js ki baaki jagah break na ho.
-   (Baad mein app.js update hone ke baad hata dein)
+   LEGACY SHIMS (backward compat)
    ===================================================== */
 async function loadUserConfigSafe() {
-  // eslint-disable-next-line
   return loadGlobalConfigSafe();
 }
 
 async function saveUserConfigSafe(_uidIgnored, config) {
-  // eslint-disable-next-line
   return saveGlobalConfigSafe(config, currentEditorInfo());
 }
 
@@ -698,9 +716,18 @@ async function loadTripsSafe() {
   return loadAllTripsSafe(3, 300);
 }
 
+/**
+ * DEPRECATED: old saveLayoutSafe (was global). Redirects to per-user.
+ */
+async function saveLayoutSafe(_layout, _editorInfo) {
+  console.warn('⚠️ saveLayoutSafe is deprecated. Use saveUserLayoutSafe instead.');
+  const u = auth.currentUser;
+  if (!u) return false;
+  return saveUserLayoutSafe(u.uid, _layout);
+}
+
 /* =====================================================
    EDITOR INFO HELPER
-   Returns current signed-in admin's info for tracking.
    ===================================================== */
 function currentEditorInfo() {
   const user = auth.currentUser;
@@ -714,7 +741,7 @@ function currentEditorInfo() {
 }
 
 /* =====================================================
-   GLOBAL EXPOSE (debugging + app.js use)
+   GLOBAL EXPOSE
    ===================================================== */
 window.__ff = {
   // Core
@@ -738,11 +765,15 @@ window.__ff = {
   listAdmins,
   listAllUsers,
 
-  // Global config
+  // Global config (shared)
   loadGlobalConfigSafe,
   saveGlobalConfigSafe,
-  saveLayoutSafe,
   subscribeToConfig,
+
+  // Per-user layout (personal)
+  loadUserLayoutSafe,
+  saveUserLayoutSafe,
+  subscribeToUserLayout,
 
   // Trips (shared)
   todayDocId,
@@ -756,15 +787,17 @@ window.__ff = {
   deleteTripSafe,
   deleteTripsBulkSafe,
 
-  // Legacy shims (kept for compatibility)
+  // Legacy shims
   loadUserConfigSafe,
   saveUserConfigSafe,
   loadTodayTripSafe,
   saveTodayTripSafe,
   loadTripsSafe,
+  saveLayoutSafe,
 
   // Helpers
   currentEditorInfo,
+  hexToRgb,
 
   // Constants
   DEFAULT_VEHICLES,
@@ -774,6 +807,6 @@ window.__ff = {
 };
 
 console.log(
-  '%c🚀 FareFlow Firebase ready (v4.0 — Global Shared + Real-Time)',
+  '%c🚀 FareFlow Firebase ready (v4.2 — Per-User Layout + Android Fix + Solid Card BG)',
   'color:#f6d365;font-weight:bold;'
 );

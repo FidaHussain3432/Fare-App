@@ -1,6 +1,12 @@
 /* =====================================================
    THREE.JS BACKGROUND — FUTURISTIC ROAD + REALISTIC BUS
    =====================================================
+   v3.1 UPDATES:
+   • Canvas opacity now synced with CSS layout vars
+     (so strong solid cards → slightly dimmer background
+      for better contrast/readability)
+   • Preserved: everything from v3.0
+   =====================================================
    v3.0 UPDATES:
    • "24 EXPRESS" text on bus (side + front destination)
    • Blurry immersive headlights (dark mode) — soft glow
@@ -1271,15 +1277,44 @@
   }, { passive: true });
 
   /* =====================================================
-     CANVAS OPACITY
+     CANVAS OPACITY — synced with CSS layout variables
+     =====================================================
+     When the user increases card solidity (opacity) in the
+     Layout tab, we slightly reduce the canvas brightness so
+     the cards and the bus animation have better contrast.
      ===================================================== */
   const applyCanvasOpacity = () => {
-    const theme = document.documentElement.dataset.theme;
-    canvas.style.opacity = theme === 'light' ? '0.65' : '0.95';
+    const root = document.documentElement;
+    const theme = root.dataset.theme || 'dark';
+
+    // Read the CSS variable that app.js sets on :root
+    // (falls back to sensible defaults if not set yet)
+    const cssOpacity = parseFloat(
+      getComputedStyle(root).getPropertyValue('--card-bg-opacity')
+    ) || (theme === 'light' ? 0.90 : 0.82);
+
+    // Base opacity per theme
+    const base = theme === 'light' ? 0.65 : 0.95;
+
+    // The more solid the cards (higher cssOpacity), the lower
+    // the canvas opacity → better contrast + readability.
+    // Range: multiply by [0.75 .. 1.0] depending on card opacity
+    const factor = 1.0 - Math.max(0, Math.min(1, cssOpacity)) * 0.25;
+    const final = base * factor;
+
+    canvas.style.opacity = final.toFixed(3);
   };
+
   applyCanvasOpacity();
+
+  // Re-apply when theme changes
   new MutationObserver(applyCanvasOpacity).observe(document.documentElement, {
     attributes: true, attributeFilter: ['data-theme']
+  });
+
+  // Re-apply when app.js changes layout CSS vars (style attr on :root)
+  new MutationObserver(applyCanvasOpacity).observe(document.documentElement, {
+    attributes: true, attributeFilter: ['style']
   });
 
 })();
