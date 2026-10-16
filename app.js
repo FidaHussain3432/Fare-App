@@ -1,38 +1,49 @@
 /* =====================================================
-   FAREFLOW — MAIN APP LOGIC v3.0
+   FAREFLOW — MAIN APP LOGIC v4.0
    =====================================================
-   • Boot loader progress (0→100%) with status
-   • Skeleton screen during bootstrap
-   • Sparkle button effect + 7-sec cooldown
+   • Global SHARED data (config + trips)
+   • Real-time sync (Firestore onSnapshot)
+   • Toast notifications on remote changes
+   • Layout customization (card blur / opacity)
+   • Directional sub-tab slide animations
+   • Staggered card entry (immersive)
+   • Tab indicator centering fix
+   • Swipe-disabled sub-tabs (only titles clickable)
    • Admin gating (super admin: fh87022@gmail.com)
    • Today's entry persistence (upsert + auto-load)
-   • Vehicle stepper (− / +) with proper replace bug fix
+   • Vehicle stepper (− / +)
    • Per-vehicle expenses with "Free" toggle
-   • Sliding gold tab indicators (centered, dynamic)
-   • Boys card restructured (2-row grid, no X button)
+   • Boys card restructured
    • Filter tabs: All, Batches, Present, Absent, Not Paid
-   • Girls count × fare = total (synced to summary)
-   • History bulk delete + refresh button
+   • Girls count × fare = total
+   • History bulk delete + refresh
    • PWA install prompt
-   • Confirm modal (reusable)
+   • Confirm modal
    • Admin management tab
-   FIX v3.0:
-   • Sub-tab 1 blank bug — proper panel activation
-   • Vehicle merge bug — replace, not merge (in firebase)
-   • Indicator centering — uses getBoundingClientRect
-   • Boys row: no X button, auto-height, responsive
-   • Girls tab: count + fare per + computed total
+   • Layout sub-tab (new)
    ===================================================== */
-   
+
 /* =====================================================
    STATE
    ===================================================== */
 const state = {
   user: null,
   isAdminUser: false,
+
+  /* Shared data */
   vehicles: [],
   batches: [],
   boysMaster: [],
+  layout: {
+    darkBlur: 22,
+    lightBlur: 18,
+    darkOpacity: 0.06,
+    lightOpacity: 0.55,
+    darkSaturate: 160,
+    lightSaturate: 160,
+    cardRadius: 18,
+    shadowDepth: 0.5
+  },
 
   trip: {
     date: new Date().toISOString().slice(0, 10),
@@ -53,6 +64,31 @@ const state = {
   usersCache: [],
   pwaPrompt: null,
   loadedTodayId: null,
+
+  /* Real-time unsubscribers */
+  unsubscribers: {
+    config: null,
+    trips: null,
+    today: null
+  },
+
+  /* Toast debounce for remote changes */
+  remoteToast: {
+    lastAt: 0,
+    lastBy: '',
+    timer: null
+  },
+
+  /* Sub-tab animation direction tracking */
+  subtabOrder: {
+    'entry':  ['trip', 'boys', 'girls', 'expenses', 'summary'],
+    'settings': ['vehicles', 'batches', 'boysmaster', 'layout', 'admins'],
+    current: { entry: 'trip', settings: 'vehicles' }
+  },
+
+  /* Dirty flag — prevent re-render loop when we are the ones saving */
+  suppressRemoteToast: false,
+
   cooldown: {
     signin: 0,
     signup: 0
@@ -80,6 +116,30 @@ function toast(msg, ms = 2200) {
   el.classList.add('show');
   clearTimeout(el._t);
   el._t = setTimeout(() => el.classList.remove('show'), ms);
+}
+
+/* Remote-change toast (de-bounced) */
+function remoteToast(name, actionLabel = 'ne data update kiya') {
+  const now = Date.now();
+  const r = state.remoteToast;
+
+  if (now - r.lastAt < 1500 && r.lastBy === name) return;
+  r.lastAt = now;
+  r.lastBy = name;
+
+  toast(`📝 ${name} ${actionLabel}`, 2400);
+}
+
+/* Editor info for Firestore tracking */
+function editorInfo() {
+  const u = state.user;
+  if (!u) return { uid: 'unknown', email: '', name: 'Unknown' };
+  const email = u.email || '';
+  return {
+    uid:   u.uid,
+    email,
+    name:  u.displayName || email.split('@')[0] || 'Admin'
+  };
 }
 
 /* =====================================================
@@ -111,14 +171,10 @@ function confirmDialog(title, msg, okText = 'Confirm') {
 }
 
 /* =====================================================
-   BOOT LOADER — now uses <progress> element
+   BOOT LOADER
    ===================================================== */
 const boot = {
-  el: null,
-  bar: null,     // <progress id="boot-bar">
-  pct: null,     // <output id="boot-pct">
-  status: null,  // <p id="boot-status">
-  value: 0,
+  el: null, bar: null, pct: null, status: null, value: 0,
 
   init() {
     this.el     = $('#boot-loader');
@@ -129,7 +185,6 @@ const boot = {
 
   set(value, label) {
     this.value = Math.max(0, Math.min(100, value));
-    // Native <progress> uses .value attribute (max=100)
     if (this.bar) this.bar.value = this.value;
     if (this.pct) this.pct.textContent = Math.round(this.value) + '%';
     if (label && this.status) this.status.textContent = label;
@@ -158,12 +213,11 @@ function showSkeleton(show) {
 }
 
 /* =====================================================
-   SPARKLE BUTTON EFFECT — uses <i> instead of <span>
+   SPARKLE BUTTON EFFECT
    ===================================================== */
 function spawnSparkles(btn, count = 14) {
   if (!btn) return;
 
-  // Ensure sparkle layer exists (semantic <i>)
   let layer = btn.querySelector('.sparkle-layer');
   if (!layer) {
     layer = document.createElement('i');
@@ -183,7 +237,6 @@ function spawnSparkles(btn, count = 14) {
 
     const angle = (Math.random() - 0.5) * Math.PI * 0.9;
     const dist = 60 + Math.random() * 80;
-
     const dir = Math.random() < 0.5 ? -1 : 1;
     const dx = dir * (40 + Math.random() * 90);
     const dy = Math.sin(angle) * dist * 0.6;
@@ -195,10 +248,7 @@ function spawnSparkles(btn, count = 14) {
     dot.style.setProperty('--dur', (700 + Math.random() * 400) + 'ms');
 
     layer.appendChild(dot);
-
-    setTimeout(() => {
-      dot.remove();
-    }, 1200);
+    setTimeout(() => dot.remove(), 1200);
   }
 
   btn.classList.add('burst');
@@ -291,7 +341,38 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', ()
 });
 
 /* =====================================================
-   SLIDING TAB INDICATOR
+   APPLY LAYOUT — CSS variables for card blur / opacity
+   ===================================================== */
+function applyLayoutToCSS(layout) {
+  const L = { ...state.layout, ...(layout || {}) };
+  state.layout = L;
+
+  const root = document.documentElement;
+  const isLight = root.dataset.theme === 'light';
+
+  const blur     = isLight ? L.lightBlur    : L.darkBlur;
+  const opacity  = isLight ? L.lightOpacity : L.darkOpacity;
+  const saturate = isLight ? L.lightSaturate : L.darkSaturate;
+
+  root.style.setProperty('--blur',          blur + 'px');
+  root.style.setProperty('--glass-bg',      `rgba(255,255,255,${opacity})`);
+  root.style.setProperty('--glass-sat',     saturate + '%');
+  root.style.setProperty('--radius',        (L.cardRadius || 18) + 'px');
+
+  /* shadow depth — scale the base shadow */
+  const depth = Math.max(0, Math.min(1.5, L.shadowDepth ?? 0.5));
+  root.style.setProperty('--shadow-depth', depth.toFixed(2));
+}
+
+/* Re-apply layout when theme changes */
+const _origApplyTheme = applyTheme;
+applyTheme = function (mode, animate = true) {
+  _origApplyTheme(mode, animate);
+  applyLayoutToCSS(state.layout);
+};
+
+/* =====================================================
+   SLIDING TAB INDICATOR — FIXED CENTERING
    ===================================================== */
 function positionIndicator(container, indicatorSel, activeSel) {
   if (!container) return;
@@ -301,10 +382,14 @@ function positionIndicator(container, indicatorSel, activeSel) {
 
   const cRect = container.getBoundingClientRect();
   const aRect = active.getBoundingClientRect();
+  const containerStyle = window.getComputedStyle(container);
+  const padLeft = parseFloat(containerStyle.paddingLeft) || 0;
 
-  const left = aRect.left - cRect.left;
+  /* Position relative to container's padding box */
+  const left  = aRect.left - cRect.left - padLeft;
   const width = aRect.width;
 
+  /* Use `left` (not transform) so animation feels perfectly centered */
   ind.style.width = width + 'px';
   ind.style.transform = `translateX(${left}px)`;
   ind.classList.add('ready');
@@ -333,16 +418,99 @@ function initTabs() {
     }, 100);
   }, { passive: true });
 
+  /* Disable horizontal swipe on subtabs (finger gesture) */
   [entrySubs, settingsSubs].forEach(container => {
-    if (container) {
-      container.addEventListener('scroll', () => {
-        const active = container.querySelector('.subtab.active');
-        if (active) {
-          active.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    if (!container) return;
+
+    /* Kill horizontal swipes: allow vertical scroll of page, but block
+       the container from being "dragged" by touch. */
+    let startX = 0, startY = 0, scrolling = false;
+
+    container.addEventListener('touchstart', e => {
+      const t = e.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      scrolling = false;
+    }, { passive: true });
+
+    container.addEventListener('touchmove', e => {
+      const t = e.touches[0];
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+
+      if (!scrolling) {
+        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8) {
+          /* Horizontal drag on the tabs bar — block it */
+          e.preventDefault();
+          return;
         }
-        positionIndicator(container, '.subtab-indicator', '.subtab.active');
-      }, { passive: true });
-    }
+        if (Math.abs(dy) > 8) {
+          scrolling = true; // let page scroll
+        }
+      }
+    }, { passive: false });
+
+    /* Keep indicator aligned after programmatic scrollIntoView */
+    container.addEventListener('scroll', () => {
+      positionIndicator(container, '.subtab-indicator', '.subtab.active');
+    }, { passive: true });
+  });
+}
+
+/* =====================================================
+   DIRECTIONAL SUB-TAB SWITCHING (immersive slide)
+   ===================================================== */
+function switchSubtab(group, key) {
+  /* group = 'entry' | 'settings' */
+  const order = state.subtabOrder[group];
+  const prevKey = state.subtabOrder.current[group];
+  if (key === prevKey) return;
+
+  const prevIndex = order.indexOf(prevKey);
+  const nextIndex = order.indexOf(key);
+  const forward = nextIndex > prevIndex;
+
+  state.subtabOrder.current[group] = key;
+
+  /* Determine panel IDs */
+  const prefix = group === 'entry' ? 'entry-subtab-' : 'settings-subtab-';
+  const containerId = group === 'entry' ? 'entry-subtabs' : 'settings-subtabs';
+  const subtabsNav = $('#' + containerId);
+
+  /* Update active class on subtab buttons */
+  if (subtabsNav) {
+    $$(`#${containerId} .subtab`).forEach(t => {
+      t.classList.toggle('active', t.dataset.subtab === key);
+    });
+  }
+
+  /* Hide all panels in this group, activate new one */
+  const oldPanel = $('#' + prefix + prevKey);
+  const newPanel = $('#' + prefix + key);
+
+  if (oldPanel) oldPanel.classList.remove('active');
+
+  if (newPanel) {
+    /* Directional + stagger classes */
+    newPanel.classList.remove('slide-from-left', 'slide-from-right');
+    newPanel.classList.add(forward ? 'slide-from-left' : 'slide-from-right');
+    newPanel.classList.add('active');
+
+    /* Remove directional class after animation finishes */
+    setTimeout(() => {
+      newPanel.classList.remove('slide-from-left', 'slide-from-right');
+    }, 700);
+  }
+
+  /* Reposition indicator after DOM settles */
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      positionIndicator(
+        subtabsNav,
+        '.subtab-indicator',
+        '.subtab.active'
+      );
+    });
   });
 }
 
@@ -355,6 +523,7 @@ function initAuth() {
 
     if (!user) {
       state.isAdminUser = false;
+      detachAllListeners();
       showView('login');
       showSkeleton(false);
       if (boot.value === 100) {
@@ -398,12 +567,11 @@ function initAuth() {
     }
   });
 
-  /* ------- SIGN IN ------- */
+  /* SIGN IN */
   $('#login-form').onsubmit = async e => {
     e.preventDefault();
     const btn = $('#signin-btn');
     if (!applyCooldown(btn, 'signin', 7)) return;
-
     spawnSparkles(btn, 16);
 
     const email = $('#email').value.trim();
@@ -424,7 +592,7 @@ function initAuth() {
     }
   };
 
-  /* ------- SIGN UP ------- */
+  /* SIGN UP */
   $('#signup-btn').onclick = async () => {
     const btn = $('#signup-btn');
     const email = $('#email').value.trim();
@@ -481,22 +649,29 @@ function cleanAuthError(err) {
    BOOTSTRAP USER
    ===================================================== */
 async function bootstrapUser(user) {
-  boot.set(82, 'Loading your config…');
-  const cfg = await loadUserConfigSafe(user.uid);
+  /* 1) Load shared config once */
+  boot.set(82, 'Loading shared config…');
+  const cfg = await loadGlobalConfigSafe();
   state.vehicles   = cfg.vehicles;
   state.batches    = cfg.batches;
   state.boysMaster = cfg.boys;
+  state.layout     = cfg.layout || state.layout;
+  applyLayoutToCSS(state.layout);
 
+  /* 2) Initial trips load */
   boot.set(88, 'Loading trips…');
-  state.trips = await loadTripsSafe(user.uid);
+  state.trips = await loadAllTripsSafe(3, 300);
 
+  /* 3) Cleanup old trips */
   boot.set(92, 'Cleaning old data…');
-  const removed = await cleanupOldTrips(user.uid);
+  const removed = await cleanupOldTrips(3);
   if (removed > 0) toast(`🧹 ${removed} purane trips delete kiye (3+ months)`);
 
+  /* 4) Load today's entry */
   boot.set(95, 'Loading today\'s entry…');
   await loadTodayIntoForm();
 
+  /* 5) Initial renders */
   boot.set(97, 'Rendering…');
   renderVehicles();
   renderBatchTabs();
@@ -507,9 +682,14 @@ async function bootstrapUser(user) {
   renderExpenses();
   renderHistory();
   updateSummary();
+  renderLayoutControls();
 
+  /* 6) Bind events */
   bindStaticEvents();
   initTabs();
+
+  /* 7) Attach real-time listeners */
+  attachAllListeners();
 
   const adminsTab = $('#admins-tab-btn');
   if (adminsTab) adminsTab.hidden = !state.isAdminUser;
@@ -518,18 +698,100 @@ async function bootstrapUser(user) {
 }
 
 /* =====================================================
-   LOAD TODAY'S ENTRY
+   REAL-TIME LISTENERS
+   ===================================================== */
+function attachAllListeners() {
+  detachAllListeners();
+
+  /* --- CONFIG --- */
+  state.unsubscribers.config = subscribeToConfig((cfg, meta) => {
+    /* Update state */
+    state.vehicles   = cfg.vehicles;
+    state.batches    = cfg.batches;
+    state.boysMaster = cfg.boys;
+    state.layout     = cfg.layout || state.layout;
+
+    /* Apply layout to CSS */
+    applyLayoutToCSS(state.layout);
+
+    /* Show toast if not from us */
+    if (!meta.isInitial && meta.updatedBy && meta.updatedBy !== state.user?.uid) {
+      const who = meta.updatedByName || 'Admin';
+      remoteToast(who, 'ne config update kiya');
+    }
+
+    /* Re-render dependent UI (only if not initial) */
+    if (!meta.isInitial) {
+      renderVehicles();
+      renderBatchTabs();
+      renderBatchSettings();
+      renderBoysMaster();
+      renderVehicleSettings();
+      renderBoysList();
+      renderExpenses();
+      updateSummary();
+      renderLayoutControls();
+    }
+  });
+
+  /* --- RECENT TRIPS --- */
+  state.unsubscribers.trips = subscribeToRecentTrips((trips, meta) => {
+    state.trips = trips;
+    if (!meta.isInitial) {
+      /* No toast — trips silently refresh */
+      renderHistory($('#history-search')?.value || '');
+    }
+  }, 3, 300);
+
+  /* --- TODAY'S TRIP --- */
+  const today = todayISO();
+  state.unsubscribers.today = subscribeToTodayTrip(today, (trip, meta) => {
+    if (!meta.isInitial && meta.updatedBy && meta.updatedBy !== state.user?.uid) {
+      const who = meta.updatedByName || 'Admin';
+      remoteToast(who, 'ne aaj ki entry update ki');
+    }
+    if (!meta.isInitial && trip && state.trip.date === today) {
+      /* Update form silently from remote without wiping local edits
+         that haven't been saved yet — we only refresh if the user
+         is not actively editing (no dirty flag). We'll keep it simple:
+         reload the trip into the form only if the entry wasn't the one
+         we just saved (based on our own lastSavedAt). */
+      const myEmail = state.user?.email;
+      if (trip.updatedByEmail && trip.updatedByEmail !== myEmail) {
+        mergeTripIntoForm(trip);
+      }
+    }
+  });
+}
+
+function detachAllListeners() {
+  Object.keys(state.unsubscribers).forEach(k => {
+    const unsub = state.unsubscribers[k];
+    if (typeof unsub === 'function') {
+      try { unsub(); } catch (e) {}
+    }
+    state.unsubscribers[k] = null;
+  });
+}
+
+/* =====================================================
+   LOAD / MERGE TODAY'S TRIP INTO FORM
    ===================================================== */
 async function loadTodayIntoForm() {
   if (!state.user) return;
 
   const today = todayISO();
-  const todayTrip = await loadTodayTripSafe(state.user.uid, today);
+  const todayTrip = await loadTripByDateSafe(today);
   if (!todayTrip) {
     state.loadedTodayId = null;
     updateSaveHint();
     return;
   }
+  mergeTripIntoForm(todayTrip);
+}
+
+function mergeTripIntoForm(todayTrip) {
+  const today = todayISO();
 
   state.loadedTodayId = todayTrip.id;
   state.trip.date         = todayTrip.date || today;
@@ -558,6 +820,7 @@ async function loadTodayIntoForm() {
     };
   });
 
+  /* Update form UI */
   const dEl = $('#trip-date');
   if (dEl) dEl.value = state.trip.date;
 
@@ -566,8 +829,13 @@ async function loadTodayIntoForm() {
   const gpEl = $('#girls-fare-per');
   if (gpEl) gpEl.value = state.trip.girlsFarePer;
 
+  /* Re-render conditional areas */
+  renderVehicles();
+  renderExpenses();
+  renderBoysList();
   updateGirlsTotal();
   updateSaveHint();
+  updateSummary();
 }
 
 function updateSaveHint() {
@@ -586,7 +854,7 @@ function bindStaticEvents() {
   if (bound) return;
   bound = true;
 
-  /* ------- MAIN TABS ------- */
+  /* MAIN TABS */
   $$('.tab').forEach(tab => tab.onclick = () => {
     $$('.tab').forEach(t => t.classList.remove('active'));
     $$('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -605,32 +873,20 @@ function bindStaticEvents() {
     });
   });
 
-  /* ------- ENTRY SUB-TABS ------- */
+  /* ENTRY SUB-TABS — directional switch */
   $$('#entry-subtabs .subtab').forEach(st => st.onclick = () => {
-    $$('#entry-subtabs .subtab').forEach(t => t.classList.remove('active'));
-    $$('#tab-entry .subtab-panel').forEach(p => p.classList.remove('active'));
-    st.classList.add('active');
-    const panelId = 'entry-subtab-' + st.dataset.subtab;
-    const panel = $('#' + panelId);
-    if (panel) panel.classList.add('active');
-    positionIndicator($('#entry-subtabs'), '.subtab-indicator', '.subtab.active');
+    switchSubtab('entry', st.dataset.subtab);
   });
 
-  /* ------- SETTINGS SUB-TABS ------- */
+  /* SETTINGS SUB-TABS — directional switch */
   $$('#settings-subtabs .subtab').forEach(st => st.onclick = () => {
-    $$('#settings-subtabs .subtab').forEach(t => t.classList.remove('active'));
-    $$('#tab-settings .subtab-panel').forEach(p => p.classList.remove('active'));
-    st.classList.add('active');
-    const panelId = 'settings-subtab-' + st.dataset.subtab;
-    const panel = $('#' + panelId);
-    if (panel) panel.classList.add('active');
-    positionIndicator($('#settings-subtabs'), '.subtab-indicator', '.subtab.active');
-
+    switchSubtab('settings', st.dataset.subtab);
     if (st.dataset.subtab === 'admins' && state.isAdminUser) refreshAdminsTab();
     if (st.dataset.subtab === 'boysmaster') renderBoysMaster();
+    if (st.dataset.subtab === 'layout') renderLayoutControls();
   });
 
-  /* ------- INPUT BINDINGS ------- */
+  /* DATE / GIRLS INPUTS */
   const dateEl   = $('#trip-date');
   const girlsCountEl = $('#girls-count');
   const girlsFareEl  = $('#girls-fare-per');
@@ -639,15 +895,21 @@ function bindStaticEvents() {
     dateEl.value = state.trip.date;
     dateEl.onchange = async e => {
       state.trip.date = e.target.value || todayISO();
-      if (state.user) {
-        const trip = await loadTodayTripSafe(state.user.uid, state.trip.date);
-        if (trip && state.trip.date === todayISO()) {
-          await loadTodayIntoForm();
-          renderVehicles();
-          renderBoysList();
-          renderExpenses();
-          updateSummary();
-        }
+      /* Swap today's listener if date changed */
+      if (state.unsubscribers.today) {
+        try { state.unsubscribers.today(); } catch (err) {}
+        state.unsubscribers.today = null;
+      }
+      const trip = await loadTripByDateSafe(state.trip.date);
+      if (trip) mergeTripIntoForm(trip);
+      else resetTripForm();
+      /* Re-attach today listener (only meaningful for today) */
+      if (state.trip.date === todayISO()) {
+        state.unsubscribers.today = subscribeToTodayTrip(todayISO(), (t, meta) => {
+          if (!meta.isInitial && t && meta.updatedBy !== state.user?.uid) {
+            mergeTripIntoForm(t);
+          }
+        });
       }
     };
   }
@@ -678,19 +940,19 @@ function bindStaticEvents() {
     toast('🗑️ Form cleared');
   };
 
-  /* ------- BULK ACTIONS ------- */
+  /* BULK ACTIONS */
   $('#select-all-btn').onclick  = () => bulkSelect(true);
   $('#clear-sel-btn').onclick   = () => bulkSelect(false);
   $('#apply-fare-btn').onclick  = bulkApplyFare;
   $('#mark-absent-btn').onclick = () => bulkSetAbsent(true);
   $('#mark-present-btn').onclick= () => bulkSetAbsent(false);
 
-  /* ------- SETTINGS FORMS ------- */
+  /* SETTINGS FORMS */
   $('#add-vehicle-form').onsubmit = addVehicle;
   $('#add-batch-form').onsubmit   = addBatch;
   $('#add-boy-master').onsubmit   = addBoyMaster;
 
-  /* ------- HISTORY ------- */
+  /* HISTORY */
   const searchInput = $('#history-search');
   if (searchInput) searchInput.oninput = e => renderHistory(e.target.value);
 
@@ -699,7 +961,7 @@ function bindStaticEvents() {
     refreshHistBtn.disabled = true;
     refreshHistBtn.textContent = '🔄 Refreshing…';
     try {
-      state.trips = await loadTripsSafe(state.user.uid);
+      state.trips = await loadAllTripsSafe(3, 300);
       renderHistory(searchInput ? searchInput.value : '');
       toast('✅ History refreshed');
     } catch (e) {
@@ -733,19 +995,114 @@ function bindStaticEvents() {
     const removed = await deleteTripsBulkSafe(ids);
     toast(`🗑️ ${removed} trip(s) delete`);
     state.historySelected.clear();
-    state.trips = await loadTripsSafe(state.user.uid);
+    state.trips = await loadAllTripsSafe(3, 300);
     renderHistory(searchInput ? searchInput.value : '');
   };
 
-  /* ------- MODAL ------- */
+  /* MODAL */
   $('#modal-close').onclick = () => $('#detail-modal').close();
   $('#detail-modal').addEventListener('click', e => {
     if (e.target === $('#detail-modal')) $('#detail-modal').close();
   });
 
-  /* ------- ADMINS TAB ------- */
+  /* ADMINS TAB */
   const refreshAdmins = $('#refresh-users-btn');
   if (refreshAdmins) refreshAdmins.onclick = refreshAdminsTab;
+
+  /* LAYOUT TAB CONTROLS */
+  bindLayoutControls();
+}
+
+/* =====================================================
+   LAYOUT TAB — sliders + live preview
+   ===================================================== */
+function renderLayoutControls() {
+  const L = state.layout;
+
+  const setVal = (id, v) => { const el = $(id); if (el) el.value = v; };
+  const setTxt = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+
+  setVal('#layout-dark-blur',  L.darkBlur);
+  setVal('#layout-light-blur', L.lightBlur);
+  setVal('#layout-dark-op',    L.darkOpacity);
+  setVal('#layout-light-op',   L.lightOpacity);
+  setVal('#layout-dark-sat',   L.darkSaturate);
+  setVal('#layout-light-sat',  L.lightSaturate);
+  setVal('#layout-radius',     L.cardRadius);
+  setVal('#layout-shadow',     L.shadowDepth);
+
+  setTxt('#layout-dark-blur-val',  L.darkBlur + 'px');
+  setTxt('#layout-light-blur-val', L.lightBlur + 'px');
+  setTxt('#layout-dark-op-val',    L.darkOpacity.toFixed(2));
+  setTxt('#layout-light-op-val',   L.lightOpacity.toFixed(2));
+  setTxt('#layout-dark-sat-val',   L.darkSaturate + '%');
+  setTxt('#layout-light-sat-val',  L.lightSaturate + '%');
+  setTxt('#layout-radius-val',     L.cardRadius + 'px');
+  setTxt('#layout-shadow-val',     L.shadowDepth.toFixed(2));
+}
+
+function bindLayoutControls() {
+  const onChange = () => {
+    const L = {
+      darkBlur:     +$('#layout-dark-blur')?.value  || 22,
+      lightBlur:    +$('#layout-light-blur')?.value || 18,
+      darkOpacity:  +$('#layout-dark-op')?.value    || 0.06,
+      lightOpacity: +$('#layout-light-op')?.value   || 0.55,
+      darkSaturate: +$('#layout-dark-sat')?.value   || 160,
+      lightSaturate:+$('#layout-light-sat')?.value  || 160,
+      cardRadius:   +$('#layout-radius')?.value     || 18,
+      shadowDepth:  +$('#layout-shadow')?.value     || 0.5
+    };
+    applyLayoutToCSS(L);
+    renderLayoutControls();
+  };
+
+  ['#layout-dark-blur', '#layout-light-blur',
+   '#layout-dark-op',   '#layout-light-op',
+   '#layout-dark-sat',  '#layout-light-sat',
+   '#layout-radius',    '#layout-shadow'
+  ].forEach(sel => {
+    const el = $(sel);
+    if (el) el.oninput = onChange;
+  });
+
+  const saveBtn = $('#layout-save');
+  if (saveBtn) saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    saveBtn.textContent = '⏳ Saving…';
+    try {
+      const ok = await saveLayoutSafe(state.layout, editorInfo());
+      if (ok) {
+        toast('✅ Layout saved (shared with all admins)');
+      } else {
+        toast('❌ Save failed');
+      }
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = '💾 Save Layout';
+    }
+  };
+
+  const resetBtn = $('#layout-reset');
+  if (resetBtn) resetBtn.onclick = async () => {
+    const ok = await confirmDialog(
+      'Reset Layout',
+      'Sab layout settings default pe wapis chali jayengi. Confirm?',
+      'Reset'
+    );
+    if (!ok) return;
+    const D = {
+      darkBlur: 22, lightBlur: 18,
+      darkOpacity: 0.06, lightOpacity: 0.55,
+      darkSaturate: 160, lightSaturate: 160,
+      cardRadius: 18, shadowDepth: 0.5
+    };
+    state.layout = D;
+    applyLayoutToCSS(D);
+    renderLayoutControls();
+    await saveLayoutSafe(D, editorInfo());
+    toast('↩️ Layout reset');
+  };
 }
 
 /* =====================================================
@@ -769,12 +1126,10 @@ function renderVehicles() {
     li.className = 'vehicle-item' + (state.trip.vehicles[v] ? ' active' : '');
     li.dataset.v = v;
 
-    // Semantic: use <strong> as label (semantic heading-level)
     const label = document.createElement('strong');
     label.className = 'veh-label';
     label.textContent = v;
 
-    // Semantic: <section> for stepper container
     const stepper = document.createElement('section');
     stepper.className = 'stepper';
 
@@ -783,7 +1138,6 @@ function renderVehicles() {
     btnMinus.textContent = '−';
     btnMinus.setAttribute('aria-label', `Decrease ${v}`);
 
-    // Semantic: <output> for numeric value
     const valEl = document.createElement('output');
     valEl.className = 'step-value';
     valEl.textContent = state.trip.vehicles[v] || 0;
@@ -866,7 +1220,6 @@ function renderExpenses() {
     const li = document.createElement('li');
     li.className = 'expense-row';
 
-    // Semantic: <strong> for vehicle name
     const vEl = document.createElement('strong');
     vEl.className = 'exp-veh';
     vEl.textContent = v;
@@ -902,7 +1255,6 @@ function renderExpenses() {
     freeCb.type = 'checkbox';
     freeCb.checked = !!(rec.tollFree && rec.driverFree);
 
-    // Semantic: <small> for "Free" text (natural inline text)
     const freeText = document.createElement('small');
     freeText.textContent = 'Free';
 
@@ -945,7 +1297,7 @@ function updateExpenseTotals() {
 }
 
 /* =====================================================
-   GIRLS — COUNT × FARE = TOTAL
+   GIRLS
    ===================================================== */
 function updateGirlsTotal() {
   const count = state.trip.girlsCount || 0;
@@ -990,8 +1342,6 @@ function renderBatchTabs() {
 
 /* =====================================================
    BOYS LIST
-   Row 1: [☐] Name  [Batch]
-   Row 2: [Vehicle ▼] [Fare] [☐ Absent]
    ===================================================== */
 function renderBoysList() {
   const ul = $('#boys-list');
@@ -1064,7 +1414,6 @@ function renderBoysList() {
       (isNotPaid ? ' not-paid' : '');
     li.dataset.idx = globalIdx;
 
-    /* --- Row 1: Select checkbox --- */
     const sel = document.createElement('input');
     sel.type = 'checkbox';
     sel.className = 'row-sel';
@@ -1075,18 +1424,15 @@ function renderBoysList() {
       updateBulkCount();
     };
 
-    /* --- Row 1: Name --- */
     const name = document.createElement('strong');
     name.className = 'row-name';
     name.textContent = boy.name;
     name.title = boy.name;
 
-    /* --- Row 1: Batch badge --- */
     const batch = document.createElement('em');
     batch.className = 'row-batch';
     batch.textContent = boy.batch;
 
-    /* --- Row 2: Vehicle dropdown --- */
     const vehSel = document.createElement('select');
     vehSel.className = 'row-veh';
     const currentVeh = boy.vehicle || vehicles[0];
@@ -1099,7 +1445,6 @@ function renderBoysList() {
     });
     vehSel.onchange = () => { boy.vehicle = vehSel.value; };
 
-    /* --- Row 2: Fare input --- */
     const fareIn = document.createElement('input');
     fareIn.type = 'number';
     fareIn.min = 0;
@@ -1112,7 +1457,6 @@ function renderBoysList() {
       updateSummary();
     };
 
-    /* --- Row 2: Absent toggle --- */
     const absentLabel = document.createElement('label');
     absentLabel.className = 'absent-toggle' + (boy.absent ? ' on' : '');
     absentLabel.title = boy.absent ? 'Mark Present' : 'Mark Absent';
@@ -1127,7 +1471,6 @@ function renderBoysList() {
       updateSummary();
     };
 
-    // Semantic: <small> instead of <span>
     const absentText = document.createElement('small');
     absentText.textContent = 'Absent';
 
@@ -1255,13 +1598,17 @@ function updateSummary() {
 }
 
 /* =====================================================
-   SAVE TRIP
+   SAVE TRIP (global)
    ===================================================== */
 async function saveTrip() {
   if (!state.user) return toast('Login required');
 
   const btn = $('#save-trip');
   if (btn) btn.disabled = true;
+
+  /* Prevent the remote-toast listener from firing for our own save */
+  state.suppressRemoteToast = true;
+  setTimeout(() => { state.suppressRemoteToast = false; }, 2500);
 
   try {
     const vehiclesMap = { ...state.trip.vehicles };
@@ -1288,7 +1635,6 @@ async function saveTrip() {
     const net       = totalFare - toll - driver;
 
     const payload = {
-      date: state.trip.date,
       vehicles: vehiclesMap,
       boys: state.trip.boys.map(b => ({
         name: b.name,
@@ -1308,24 +1654,18 @@ async function saveTrip() {
       net
     };
 
-    const today = todayISO();
-    let result;
+    const result = await saveTripByDateSafe(state.trip.date, payload, editorInfo());
+    state.loadedTodayId = result.id;
 
-    if (state.trip.date === today) {
-      result = await saveTodayTripSafe(state.user.uid, today, payload);
-      state.loadedTodayId = result.id;
-    } else {
-      const id = await saveTripSafe(state.user.uid, payload);
-      result = { id, updated: false };
-    }
-
-    toast(result.updated ? '✅ Today\'s entry updated!' : '✅ Trip saved!');
+    toast(result.updated ? '✅ Entry updated!' : '✅ Trip saved!');
     updateSaveHint();
 
-    state.trips = await loadTripsSafe(state.user.uid);
+    /* Refresh trips list locally (onSnapshot will also do it, but for
+       snappier UX we update here) */
+    state.trips = await loadAllTripsSafe(3, 300);
     renderHistory();
 
-    if (state.trip.date !== today) resetTripForm();
+    if (state.trip.date !== todayISO()) resetTripForm();
   } catch (err) {
     toast('❌ Save fail: ' + (err.message || err.code));
   } finally {
@@ -1397,7 +1737,6 @@ function renderHistory(filter = '') {
       updateHistoryCount();
     };
 
-    // Semantic: <article> for content body
     const body = document.createElement('article');
     body.className = 'hist-body';
     body.style.cursor = 'pointer';
@@ -1408,7 +1747,6 @@ function renderHistory(filter = '') {
     const time = document.createElement('time');
     time.textContent = t.date || '—';
     if (t.date === today) {
-      // Semantic: <small> instead of <span>
       const tag = document.createElement('small');
       tag.className = 'today-tag';
       tag.textContent = 'TODAY';
@@ -1425,7 +1763,8 @@ function renderHistory(filter = '') {
       .map(([k, v]) => `${k}×${v}`).join(', ');
     const presentCount = (t.boys || []).filter(b => !b.absent).length;
     const absentCount  = (t.boys || []).filter(b => b.absent).length;
-    p.textContent = `${vList || 'No vehicles'} • Present: ${presentCount} • Absent: ${absentCount} • Fare: ${fmt(t.totalFare)} • Toll: ${fmt(t.toll)} • Driver: ${fmt(t.driver)}`;
+    const whoBy = t.updatedByName ? ` • by ${esc(t.updatedByName)}` : '';
+    p.textContent = `${vList || 'No vehicles'} • Present: ${presentCount} • Absent: ${absentCount} • Fare: ${fmt(t.totalFare)} • Toll: ${fmt(t.toll)} • Driver: ${fmt(t.driver)}${whoBy}`;
 
     body.append(header, p);
     li.append(cb, body);
@@ -1520,6 +1859,10 @@ function showTripDetails(t) {
     </section>
   `);
 
+  const whoHTML = t.updatedByName
+    ? `<li><em>Last updated by</em><strong>${esc(t.updatedByName)}</strong></li>`
+    : '';
+
   body.insertAdjacentHTML('beforeend', `
     <section class="modal-section">
       <h3>💰 Financials</h3>
@@ -1533,6 +1876,7 @@ function showTripDetails(t) {
           <em><strong>Net ${t.net >= 0 ? 'Profit ✅' : 'Loss ❌'}</strong></em>
           <strong style="color:${t.net >= 0 ? 'var(--green)' : 'var(--red)'}">${fmt(t.net)}</strong>
         </li>
+        ${whoHTML}
       </ul>
     </section>
   `);
@@ -1564,11 +1908,7 @@ function renderVehicleSettings() {
     rm.onclick = async () => {
       if (state.vehicles.length <= 1) return toast('Kam az kam 1 vehicle chahiye');
       state.vehicles.splice(i, 1);
-      await saveUserConfigSafe(state.user.uid, {
-        vehicles: state.vehicles,
-        batches: state.batches,
-        boys: state.boysMaster
-      });
+      await persistGlobalConfig();
       renderVehicleSettings();
       renderVehicles();
       renderBoysList();
@@ -1604,11 +1944,7 @@ function renderBatchSettings() {
     rm.onclick = async () => {
       state.batches.splice(i, 1);
       if (state.activeBatch === b) state.activeBatch = 'all';
-      await saveUserConfigSafe(state.user.uid, {
-        vehicles: state.vehicles,
-        batches: state.batches,
-        boys: state.boysMaster
-      });
+      await persistGlobalConfig();
       renderBatchSettings();
       renderBatchTabs();
       renderBoysList();
@@ -1705,11 +2041,23 @@ function renderBoysMaster() {
 }
 
 async function persistBoysMaster() {
-  await saveUserConfigSafe(state.user.uid, {
+  await persistGlobalConfig();
+}
+
+/* =====================================================
+   SETTINGS — GLOBAL CONFIG PERSISTENCE
+   ===================================================== */
+async function persistGlobalConfig() {
+  /* Suppress remote toast for our own save */
+  state.suppressRemoteToast = true;
+  setTimeout(() => { state.suppressRemoteToast = false; }, 2000);
+
+  await saveGlobalConfigSafe({
     vehicles: state.vehicles,
-    batches: state.batches,
-    boys: state.boysMaster
-  });
+    batches:  state.batches,
+    boys:     state.boysMaster,
+    layout:   state.layout
+  }, editorInfo());
 }
 
 /* =====================================================
@@ -1723,11 +2071,7 @@ async function addVehicle(e) {
 
   state.vehicles.push(v);
   $('#new-vehicle').value = '';
-  await saveUserConfigSafe(state.user.uid, {
-    vehicles: state.vehicles,
-    batches: state.batches,
-    boys: state.boysMaster
-  });
+  await persistGlobalConfig();
   renderVehicleSettings();
   renderVehicles();
   renderExpenses();
@@ -1743,11 +2087,7 @@ async function addBatch(e) {
 
   state.batches.push(b);
   $('#new-batch').value = '';
-  await saveUserConfigSafe(state.user.uid, {
-    vehicles: state.vehicles,
-    batches: state.batches,
-    boys: state.boysMaster
-  });
+  await persistGlobalConfig();
   renderBatchSettings();
   renderBatchTabs();
   renderBoysMaster();
@@ -1807,12 +2147,10 @@ async function refreshAdminsTab() {
       const li = document.createElement('li');
       li.className = 'admin-row' + (isAdm ? ' is-admin' : '');
 
-      // Semantic: <output> for avatar
       const av = document.createElement('output');
       av.className = 'admin-avatar';
       av.textContent = (u.email || '?')[0].toUpperCase();
 
-      // Semantic: <section> for info block
       const info = document.createElement('section');
       info.className = 'admin-info';
       const strong = document.createElement('strong');
@@ -1944,7 +2282,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const d = $('#trip-date');
   if (d) d.value = todayISO();
 
-  // Safety timeout
   setTimeout(() => {
     if (boot.value < 100) {
       boot.set(100, 'Ready!');

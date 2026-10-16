@@ -11,7 +11,7 @@
     <meta name="apple-mobile-web-app-title" content="FareFlow" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="application-name" content="FareFlow" />
-    <title>FareFlow — Fleet & Fare Manager</title>
+    <title>FareFlow</title>
 
     <!-- PWA MANIFEST -->
     <link rel="manifest" href="manifest.json" />
@@ -332,6 +332,9 @@
                 <button class="subtab" data-subtab="boysmaster" role="tab" type="button">
                     <em>👦</em><strong>Boys List</strong>
                 </button>
+                <button class="subtab" data-subtab="layout" role="tab" type="button">
+                    <em>🎨</em><strong>Layout</strong>
+                </button>
                 <button class="subtab" data-subtab="admins" role="tab" type="button" id="admins-tab-btn">
                     <em>👑</em><strong>Create Admins</strong>
                 </button>
@@ -380,6 +383,113 @@
                         <select id="master-batch" required></select>
                         <button type="submit" class="btn-primary small">+</button>
                     </form>
+                </section>
+            </article>
+
+            <!-- SETTINGS SUB-TAB: LAYOUT (NEW) -->
+            <article id="settings-subtab-layout" class="subtab-panel">
+                <section class="glass-card">
+                    <header class="card-head">
+                        <h2>🎨 Layout Customization</h2>
+                        <p class="hint">Cards ka blur aur opacity adjust karein — changes live preview mein dikhenge aur sab admins ke saath share honge.</p>
+                    </header>
+
+                    <!-- DARK THEME GROUP -->
+                    <header class="card-head mt">
+                        <h3>🌙 Dark Theme</h3>
+                        <p class="hint">Cards ka look dark mode mein</p>
+                    </header>
+
+                    <label class="layout-field">
+                        <em>Card Blur</em>
+                        <input type="range" id="layout-dark-blur" min="0" max="40" step="1" value="22" />
+                        <output id="layout-dark-blur-val" for="layout-dark-blur">22px</output>
+                    </label>
+
+                    <label class="layout-field">
+                        <em>Card Opacity</em>
+                        <input type="range" id="layout-dark-op" min="0" max="0.4" step="0.01" value="0.06" />
+                        <output id="layout-dark-op-val" for="layout-dark-op">0.06</output>
+                    </label>
+
+                    <label class="layout-field">
+                        <em>Backdrop Saturation</em>
+                        <input type="range" id="layout-dark-sat" min="100" max="250" step="5" value="160" />
+                        <output id="layout-dark-sat-val" for="layout-dark-sat">160%</output>
+                    </label>
+
+                    <!-- LIGHT THEME GROUP -->
+                    <header class="card-head mt">
+                        <h3>☀️ Light Theme</h3>
+                        <p class="hint">Cards ka look light mode mein</p>
+                    </header>
+
+                    <label class="layout-field">
+                        <em>Card Blur</em>
+                        <input type="range" id="layout-light-blur" min="0" max="40" step="1" value="18" />
+                        <output id="layout-light-blur-val" for="layout-light-blur">18px</output>
+                    </label>
+
+                    <label class="layout-field">
+                        <em>Card Opacity</em>
+                        <input type="range" id="layout-light-op" min="0" max="1" step="0.01" value="0.55" />
+                        <output id="layout-light-op-val" for="layout-light-op">0.55</output>
+                    </label>
+
+                    <label class="layout-field">
+                        <em>Backdrop Saturation</em>
+                        <input type="range" id="layout-light-sat" min="100" max="250" step="5" value="160" />
+                        <output id="layout-light-sat-val" for="layout-light-sat">160%</output>
+                    </label>
+
+                    <!-- SHAPE GROUP -->
+                    <header class="card-head mt">
+                        <h3>📐 Shape & Depth</h3>
+                        <p class="hint">Cards ki shape aur shadow</p>
+                    </header>
+
+                    <label class="layout-field">
+                        <em>Corner Radius</em>
+                        <input type="range" id="layout-radius" min="0" max="40" step="1" value="18" />
+                        <output id="layout-radius-val" for="layout-radius">18px</output>
+                    </label>
+
+                    <label class="layout-field">
+                        <em>Shadow Depth</em>
+                        <input type="range" id="layout-shadow" min="0" max="1.5" step="0.05" value="0.5" />
+                        <output id="layout-shadow-val" for="layout-shadow">0.50</output>
+                    </label>
+
+                    <!-- LIVE PREVIEW -->
+                    <header class="card-head mt">
+                        <h3>👁️ Live Preview</h3>
+                        <p class="hint">Ye sample card aapki settings ke saath foran update hoga</p>
+                    </header>
+
+                    <section class="glass-card layout-preview-card">
+                        <header class="card-head">
+                            <h2>Sample Heading</h2>
+                            <p class="hint">Ye text ab clear dikhega kyunki card blur ho gaya hai</p>
+                        </header>
+                        <ul class="summary-list">
+                            <li><em>Sample Item</em><strong>Rs 1,500</strong></li>
+                            <li class="total"><em>Sample Total</em><strong>Rs 5,000</strong></li>
+                        </ul>
+                    </section>
+
+                    <!-- ACTIONS -->
+                    <menu class="layout-actions">
+                        <li>
+                            <button type="button" id="layout-save" class="btn-primary ripple">
+                                <strong>💾 Save Layout</strong>
+                            </button>
+                        </li>
+                        <li>
+                            <button type="button" id="layout-reset" class="btn-ghost">
+                                ↩️ Reset to Default
+                            </button>
+                        </li>
+                    </menu>
                 </section>
             </article>
 

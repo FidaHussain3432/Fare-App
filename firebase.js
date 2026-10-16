@@ -44,15 +44,21 @@ db.enablePersistence({ synchronizeTabs: true }).catch(err => {
 /* =====================================================
    COLLECTIONS REFERENCE
    =====================================================
-   users     → { uid, email, createdAt, lastLogin }
-   admins    → { uid, email, grantedAt, grantedBy }
-   configs   → { uid, vehicles, batches, boys, updatedAt }
-   trips     → { uid, date, vehicles, boys, expenses, ... }
+   users      → { uid, email, createdAt, lastLogin }
+   admins     → { uid, email, grantedAt, grantedBy }
+   configs    → { global: { vehicles, batches, boys, layout, ... } }
+   trips      → { "YYYY-MM-DD": { vehicles, boys, expenses, ... } }
+   
+   NOTE: Ab config aur trips GLOBAL hain (shared by all admins).
+   Har admin wahi data dekhega aur edit karega.
    ===================================================== */
 const COL_USERS   = 'users';
 const COL_ADMINS  = 'admins';
 const COL_CONFIGS = 'configs';
 const COL_TRIPS   = 'trips';
+
+/* Global config doc IDs */
+const GLOBAL_CONFIG_DOC = 'global';
 
 /* =====================================================
    CONSTANTS
@@ -60,6 +66,18 @@ const COL_TRIPS   = 'trips';
 const DEFAULT_VEHICLES = ['Bus', 'Mini Bus', 'Coaster Bus', 'Van', 'Carry'];
 const DEFAULT_BATCHES  = ['24', '25', '26'];
 const DEFAULT_BOYS     = [];
+
+/* Default layout settings (customizable via Layout tab) */
+const DEFAULT_LAYOUT = {
+  darkBlur:     22,      // px — card backdrop blur in dark theme
+  lightBlur:    18,      // px — card backdrop blur in light theme
+  darkOpacity:  0.06,    // 0–1 — card background opacity (dark)
+  lightOpacity: 0.55,    // 0–1 — card background opacity (light)
+  darkSaturate: 160,     // % — backdrop saturation
+  lightSaturate:160,
+  cardRadius:   18,      // px — border radius
+  shadowDepth:  0.5      // 0–1 — shadow intensity multiplier
+};
 
 const SUPER_ADMIN_EMAILS = [
   'fh87022@gmail.com'
@@ -209,18 +227,385 @@ async function listAllUsers() {
 }
 
 /* =====================================================
-   AUTO-CLEANUP: Trips older than 3 months
+   ============== GLOBAL CONFIG ========================
+   configs/global — single doc shared by all admins
    ===================================================== */
-async function cleanupOldTrips(userId) {
+
+/**
+ * Load global config (vehicles, batches, boys, layout)
+ * Returns object with defaults if not exists
+ */
+async function loadGlobalConfigSafe() {
+  try {
+    const doc = await db.collection(COL_CONFIGS).doc(GLOBAL_CONFIG_DOC).get();
+
+    if (!doc.exists) {
+      // Create with defaults
+      const defaults = {
+        vehicles:  [...DEFAULT_VEHICLES],
+        batches:   [...DEFAULT_BATCHES],
+        boys:      [...DEFAULT_BOYS],
+        layout:    { ...DEFAULT_LAYOUT },
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedBy: 'system-bootstrap'
+      };
+      await db.collection(COL_CONFIGS).doc(GLOBAL_CONFIG_DOC).set(defaults);
+      return {
+        vehicles: [...DEFAULT_VEHICLES],
+        batches:  [...DEFAULT_BATCHES],
+        boys:     [],
+        layout:   { ...DEFAULT_LAYOUT }
+      };
+    }
+
+    const d = doc.data();
+    return {
+      vehicles: Array.isArray(d.vehicles) && d.vehicles.length
+                ? d.vehicles : [...DEFAULT_VEHICLES],
+      batches:  Array.isArray(d.batches)  && d.batches.length
+                ? d.batches  : [...DEFAULT_BATCHES],
+      boys:     Array.isArray(d.boys) ? d.boys : [],
+      layout:   { ...DEFAULT_LAYOUT, ...(d.layout || {}) },
+      updatedAt: d.updatedAt || null,
+      updatedBy: d.updatedBy || null,
+      updatedByName: d.updatedByName || null
+    };
+  } catch (err) {
+    console.warn('⚠️ Global config load failed:', err.message);
+    return {
+      vehicles: [...DEFAULT_VEHICLES],
+      batches:  [...DEFAULT_BATCHES],
+      boys:     [],
+      layout:   { ...DEFAULT_LAYOUT }
+    };
+  }
+}
+
+/**
+ * Save global config (full or partial).
+ * Automatically adds updatedBy / updatedAt for change tracking.
+ *
+ * @param {object} config         - { vehicles?, batches?, boys?, layout? }
+ * @param {object} editorInfo     - { uid, email, name } — for tracking
+ */
+async function saveGlobalConfigSafe(config, editorInfo = {}) {
+  try {
+    const payload = {
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: editorInfo.uid  || 'unknown',
+      updatedByEmail: editorInfo.email || '',
+      updatedByName:  editorInfo.name  || (editorInfo.email || '').split('@')[0] || 'Admin'
+    };
+
+    if (Array.isArray(config.vehicles))  payload.vehicles  = config.vehicles;
+    if (Array.isArray(config.batches))   payload.batches   = config.batches;
+    if (Array.isArray(config.boys))      payload.boys      = config.boys;
+    if (config.layout && typeof config.layout === 'object') {
+      payload.layout = config.layout;
+    }
+
+    await db.collection(COL_CONFIGS).doc(GLOBAL_CONFIG_DOC).set(payload, { merge: true });
+    return true;
+  } catch (err) {
+    console.error('❌ Global config save failed:', err);
+    return false;
+  }
+}
+
+/**
+ * Save only layout settings (used by Layout tab)
+ */
+async function saveLayoutSafe(layout, editorInfo = {}) {
+  try {
+    const payload = {
+      layout: { ...layout },
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: editorInfo.uid  || 'unknown',
+      updatedByEmail: editorInfo.email || '',
+      updatedByName:  editorInfo.name  || (editorInfo.email || '').split('@')[0] || 'Admin'
+    };
+    await db.collection(COL_CONFIGS).doc(GLOBAL_CONFIG_DOC).set(payload, { merge: true });
+    return true;
+  } catch (err) {
+    console.error('❌ Layout save failed:', err);
+    return false;
+  }
+}
+
+/**
+ * Real-time subscription to global config.
+ * Calls `onChange(config, meta)` whenever doc changes.
+ * Returns unsubscribe function.
+ *
+ * meta = { isInitial, updatedBy, updatedByName, updatedByEmail, updatedAt }
+ */
+function subscribeToConfig(onChange) {
+  let isFirst = true;
+
+  const unsub = db.collection(COL_CONFIGS).doc(GLOBAL_CONFIG_DOC)
+    .onSnapshot(snap => {
+      if (!snap.exists) return;
+
+      const d = snap.data();
+      const config = {
+        vehicles: Array.isArray(d.vehicles) && d.vehicles.length
+                  ? d.vehicles : [...DEFAULT_VEHICLES],
+        batches:  Array.isArray(d.batches)  && d.batches.length
+                  ? d.batches  : [...DEFAULT_BATCHES],
+        boys:     Array.isArray(d.boys) ? d.boys : [],
+        layout:   { ...DEFAULT_LAYOUT, ...(d.layout || {}) }
+      };
+
+      const meta = {
+        isInitial: isFirst,
+        updatedBy:      d.updatedBy      || null,
+        updatedByEmail: d.updatedByEmail || null,
+        updatedByName:  d.updatedByName  || null,
+        updatedAt:      d.updatedAt      || null
+      };
+
+      isFirst = false;
+
+      try {
+        onChange(config, meta);
+      } catch (e) {
+        console.error('subscribeToConfig onChange error:', e);
+      }
+    }, err => {
+      console.error('❌ subscribeToConfig error:', err);
+    });
+
+  return unsub;
+}
+
+/* =====================================================
+   ============== SHARED TRIPS =========================
+   trips/{YYYY-MM-DD} — one trip per date, shared by all
+   ===================================================== */
+
+/**
+ * Deterministic doc ID — now just the date (no uid prefix)
+ */
+function todayDocId(dateStr) {
+  return dateStr;   // e.g., "2026-10-16"
+}
+
+/**
+ * Save (upsert) trip for a given date.
+ * Replaces vehicles / boys / expenses completely.
+ * Adds updatedBy tracking.
+ *
+ * @param {string} dateStr       - "YYYY-MM-DD"
+ * @param {object} payload       - { vehicles, boys, expenses, girlsCount, ... }
+ * @param {object} editorInfo    - { uid, email, name } — for tracking
+ */
+async function saveTripByDateSafe(dateStr, payload, editorInfo = {}) {
+  const docId = todayDocId(dateStr);
+  const ref = db.collection(COL_TRIPS).doc(docId);
+
+  try {
+    const existing = await ref.get();
+    const now = FieldValue.serverTimestamp();
+
+    const baseData = {
+      // Replace-mode fields
+      vehicles:  payload.vehicles  || {},
+      boys:      payload.boys      || [],
+      expenses:  payload.expenses  || {},
+
+      // Aggregates
+      girlsCount:   payload.girlsCount   ?? 0,
+      girlsFarePer: payload.girlsFarePer ?? 0,
+      girlsTotal:   payload.girlsTotal   ?? 0,
+      boysTotal:    payload.boysTotal    ?? 0,
+      totalFare:    payload.totalFare    ?? 0,
+      toll:         payload.toll         ?? 0,
+      driver:       payload.driver       ?? 0,
+      net:          payload.net          ?? 0,
+
+      // Meta
+      date: dateStr,
+      updatedAt: now,
+      updatedBy:      editorInfo.uid   || 'unknown',
+      updatedByEmail: editorInfo.email || '',
+      updatedByName:  editorInfo.name  || (editorInfo.email || '').split('@')[0] || 'Admin'
+    };
+
+    if (existing.exists) {
+      const prevCreatedAt = existing.data()?.createdAt || now;
+      const prevCreatedBy = existing.data()?.createdBy || null;
+      await ref.set({
+        ...baseData,
+        createdAt: prevCreatedAt,
+        createdBy: prevCreatedBy
+      });
+      return { id: docId, updated: true };
+    } else {
+      await ref.set({
+        ...baseData,
+        createdAt: now,
+        createdBy: editorInfo.uid || 'unknown'
+      });
+      return { id: docId, updated: false };
+    }
+  } catch (err) {
+    console.error('❌ saveTripByDateSafe failed:', err);
+    throw err;
+  }
+}
+
+/**
+ * Load trip for a specific date (one-shot)
+ */
+async function loadTripByDateSafe(dateStr) {
+  try {
+    const docId = todayDocId(dateStr);
+    const doc = await db.collection(COL_TRIPS).doc(docId).get();
+    if (!doc.exists) return null;
+    return { id: doc.id, ...doc.data() };
+  } catch (err) {
+    console.warn('⚠️ loadTripByDateSafe failed:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Delete trip for a date
+ */
+async function deleteTripByDateSafe(dateStr) {
+  try {
+    const docId = todayDocId(dateStr);
+    await db.collection(COL_TRIPS).doc(docId).delete();
+    return true;
+  } catch (err) {
+    console.error('❌ deleteTripByDateSafe failed:', err);
+    return false;
+  }
+}
+
+/**
+ * Load recent trips (last N months) — one-shot.
+ * Fetches all trips sorted by date desc, then client-side filters.
+ */
+async function loadAllTripsSafe(monthsBack = 3, limit = 300) {
   const cutoff = new Date();
-  cutoff.setMonth(cutoff.getMonth() - 3);
+  cutoff.setMonth(cutoff.getMonth() - monthsBack);
   const cutoffISO = cutoff.toISOString().slice(0, 10);
 
   try {
-    const snap = await db.collection(COL_TRIPS)
-      .where('uid', '==', userId)
-      .get();
+    // Try indexed query first
+    let snap;
+    try {
+      snap = await db.collection(COL_TRIPS)
+        .orderBy('date', 'desc')
+        .limit(limit)
+        .get();
+    } catch (idxErr) {
+      console.warn('⚠️ Indexed trips query failed, fallback…', idxErr.code || idxErr.message);
+      snap = await db.collection(COL_TRIPS).limit(limit).get();
+    }
 
+    const trips = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(t => (t.date || '') >= cutoffISO);
+
+    // Client-side sort (safety)
+    trips.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    return trips;
+  } catch (err) {
+    console.error('❌ loadAllTripsSafe failed:', err);
+    return [];
+  }
+}
+
+/**
+ * Real-time subscription to recent trips (last 3 months).
+ * Calls `onChange(trips, meta)` whenever list changes.
+ * Returns unsubscribe function.
+ *
+ * Note: Firestore can't filter by dynamic date range in onSnapshot easily,
+ * so we fetch a reasonable limit and filter client-side.
+ */
+function subscribeToRecentTrips(onChange, monthsBack = 3, limit = 300) {
+  let isFirst = true;
+
+  const unsub = db.collection(COL_TRIPS)
+    .orderBy('date', 'desc')
+    .limit(limit)
+    .onSnapshot(snap => {
+      const cutoff = new Date();
+      cutoff.setMonth(cutoff.getMonth() - monthsBack);
+      const cutoffISO = cutoff.toISOString().slice(0, 10);
+
+      const trips = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(t => (t.date || '') >= cutoffISO);
+
+      trips.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+      const meta = { isInitial: isFirst };
+      isFirst = false;
+
+      try {
+        onChange(trips, meta);
+      } catch (e) {
+        console.error('subscribeToRecentTrips onChange error:', e);
+      }
+    }, err => {
+      console.error('❌ subscribeToRecentTrips error:', err);
+      // Fallback: try without orderBy
+      console.warn('⚠️ Retrying without orderBy…');
+      db.collection(COL_TRIPS).limit(limit).onSnapshot(
+        snap2 => {
+          const trips = snap2.docs.map(d => ({ id: d.id, ...d.data() }));
+          trips.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+          try { onChange(trips, { isInitial: false }); } catch (e) {}
+        }
+      );
+    });
+
+  return unsub;
+}
+
+/**
+ * Real-time subscription to today's trip only.
+ * Calls `onChange(trip, meta)` when today's trip changes.
+ */
+function subscribeToTodayTrip(dateStr, onChange) {
+  let isFirst = true;
+  const docId = todayDocId(dateStr);
+
+  const unsub = db.collection(COL_TRIPS).doc(docId)
+    .onSnapshot(snap => {
+      const trip = snap.exists ? { id: snap.id, ...snap.data() } : null;
+      const meta = {
+        isInitial: isFirst,
+        updatedBy:      trip?.updatedBy      || null,
+        updatedByEmail: trip?.updatedByEmail || null,
+        updatedByName:  trip?.updatedByName  || null,
+        updatedAt:      trip?.updatedAt      || null
+      };
+      isFirst = false;
+      try { onChange(trip, meta); } catch (e) {
+        console.error('subscribeToTodayTrip onChange error:', e);
+      }
+    }, err => {
+      console.error('❌ subscribeToTodayTrip error:', err);
+    });
+
+  return unsub;
+}
+
+/* =====================================================
+   AUTO-CLEANUP: Trips older than N months (GLOBAL)
+   ===================================================== */
+async function cleanupOldTrips(monthsBack = 3) {
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - monthsBack);
+  const cutoffISO = cutoff.toISOString().slice(0, 10);
+
+  try {
+    const snap = await db.collection(COL_TRIPS).get();
     if (snap.empty) return 0;
 
     const toDelete = snap.docs.filter(d => {
@@ -238,7 +623,7 @@ async function cleanupOldTrips(userId) {
     let totalDeleted = 0;
     for (const chunk of chunks) {
       const batch = db.batch();
-      chunk.forEach(doc => batch.ref ? batch.delete(doc.ref) : batch.delete(doc));
+      chunk.forEach(doc => batch.delete(doc.ref));
       await batch.commit();
       totalDeleted += chunk.length;
     }
@@ -251,196 +636,7 @@ async function cleanupOldTrips(userId) {
 }
 
 /* =====================================================
-   SAFE TRIP LOADER (History)
-   ===================================================== */
-async function loadTripsSafe(userId, limit = 200) {
-  // Attempt 1: Indexed query
-  try {
-    const snap = await db.collection(COL_TRIPS)
-      .where('uid', '==', userId)
-      .orderBy('date', 'desc')
-      .limit(limit)
-      .get();
-
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  } catch (err) {
-    console.warn('⚠️ Indexed query failed, falling back…', err.code || err.message);
-  }
-
-  // Attempt 2: Fallback without orderBy
-  try {
-    const snap = await db.collection(COL_TRIPS)
-      .where('uid', '==', userId)
-      .limit(limit)
-      .get();
-
-    const trips = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-    trips.sort((a, b) => {
-      const dateCmp = (b.date || '').localeCompare(a.date || '');
-      if (dateCmp !== 0) return dateCmp;
-      const aT = a.updatedAt?.seconds || a.createdAt?.seconds || 0;
-      const bT = b.updatedAt?.seconds || b.createdAt?.seconds || 0;
-      return bT - aT;
-    });
-
-    return trips;
-  } catch (err) {
-    console.error('❌ Trip load failed entirely:', err);
-    return [];
-  }
-}
-
-/* =====================================================
-   TODAY'S ENTRY — UPSERT (with REPLACE fix)
-   =====================================================
-   PROBLEM (v2.1):
-   Bar bar save karne par `merge: true` purane vehicle
-   keys ko overwrite nahi karta — isliye agar user ne
-   pehle "Van 1" save kiya, phir "Van" 0 karke "Bus" 1
-   kiya, to Firestore mein dono "Van" aur "Bus" dono
-   mojood rehte the.
-
-   FIX (v3.0):
-   - Fields ko COMPLETELY REPLACE karo (merge: false)
-   - `set()` without merge → poora doc overwrite
-   - Sirf `createdAt` preserve karo (agar existing hai)
-   ===================================================== */
-
-/* Deterministic ID: `${uid}_${YYYY-MM-DD}` */
-function todayDocId(uid, dateStr) {
-  return `${uid}_${dateStr}`;
-}
-
-/* Save or update today's trip (upsert with REPLACE) */
-async function saveTodayTripSafe(userId, dateStr, payload) {
-  const docId = todayDocId(userId, dateStr);
-  const ref = db.collection(COL_TRIPS).doc(docId);
-
-  try {
-    const existing = await ref.get();
-    const now = FieldValue.serverTimestamp();
-
-    if (existing.exists) {
-      // ---- UPDATE: replace vehicles/boys/expenses completely ----
-      // Preserve createdAt from existing doc
-      const prevCreatedAt = existing.data()?.createdAt || now;
-
-      await ref.set({
-        // Replace-mode fields (arrays/objects fully overwritten)
-        vehicles:  payload.vehicles  || {},
-        boys:      payload.boys      || [],
-        expenses:  payload.expenses  || {},
-
-        // Aggregates
-        girlsCount:   payload.girlsCount   ?? 0,
-        girlsFarePer: payload.girlsFarePer ?? 0,
-        girlsTotal:   payload.girlsTotal   ?? 0,
-        boysTotal:    payload.boysTotal    ?? 0,
-        totalFare:    payload.totalFare    ?? 0,
-        toll:         payload.toll         ?? 0,
-        driver:       payload.driver       ?? 0,
-        net:          payload.net          ?? 0,
-
-        // Meta
-        uid:  userId,
-        date: dateStr,
-        createdAt: prevCreatedAt,
-        updatedAt: now
-      });
-      // ^ NO `merge: true` — this fully replaces the doc while
-      //   preserving createdAt manually.
-
-      return { id: docId, updated: true };
-    } else {
-      // ---- CREATE ----
-      await ref.set({
-        // Replace-mode fields
-        vehicles:  payload.vehicles  || {},
-        boys:      payload.boys      || [],
-        expenses:  payload.expenses  || {},
-
-        // Aggregates
-        girlsCount:   payload.girlsCount   ?? 0,
-        girlsFarePer: payload.girlsFarePer ?? 0,
-        girlsTotal:   payload.girlsTotal   ?? 0,
-        boysTotal:    payload.boysTotal    ?? 0,
-        totalFare:    payload.totalFare    ?? 0,
-        toll:         payload.toll         ?? 0,
-        driver:       payload.driver       ?? 0,
-        net:          payload.net          ?? 0,
-
-        // Meta
-        uid:  userId,
-        date: dateStr,
-        createdAt: now,
-        updatedAt: now
-      });
-
-      return { id: docId, updated: false };
-    }
-  } catch (err) {
-    console.error('❌ saveTodayTripSafe failed:', err);
-    throw err;
-  }
-}
-
-/* Load today's trip if exists */
-async function loadTodayTripSafe(userId, dateStr) {
-  try {
-    const docId = todayDocId(userId, dateStr);
-    const doc = await db.collection(COL_TRIPS).doc(docId).get();
-    if (!doc.exists) return null;
-    return { id: doc.id, ...doc.data() };
-  } catch (err) {
-    console.warn('⚠️ loadTodayTripSafe failed:', err.message);
-    return null;
-  }
-}
-
-/* Delete today's trip */
-async function deleteTodayTripSafe(userId, dateStr) {
-  try {
-    const docId = todayDocId(userId, dateStr);
-    await db.collection(COL_TRIPS).doc(docId).delete();
-    return true;
-  } catch (err) {
-    console.error('❌ deleteTodayTripSafe failed:', err);
-    return false;
-  }
-}
-
-/* =====================================================
-   PAST TRIPS — LEGACY SAVE (auto-generated ID)
-   ===================================================== */
-async function saveTripSafe(userId, payload) {
-  try {
-    const docRef = await db.collection(COL_TRIPS).add({
-      vehicles:  payload.vehicles  || {},
-      boys:      payload.boys      || [],
-      expenses:  payload.expenses  || {},
-      girlsCount:   payload.girlsCount   ?? 0,
-      girlsFarePer: payload.girlsFarePer ?? 0,
-      girlsTotal:   payload.girlsTotal   ?? 0,
-      boysTotal:    payload.boysTotal    ?? 0,
-      totalFare:    payload.totalFare    ?? 0,
-      toll:         payload.toll         ?? 0,
-      driver:       payload.driver       ?? 0,
-      net:          payload.net          ?? 0,
-      date:      payload.date,
-      uid:       userId,
-      createdAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp()
-    });
-    return docRef.id;
-  } catch (err) {
-    console.error('❌ Trip save failed:', err);
-    throw err;
-  }
-}
-
-/* =====================================================
-   TRIP DELETE HELPERS — single + bulk
+   DELETE HELPERS
    ===================================================== */
 async function deleteTripSafe(tripId) {
   try {
@@ -475,68 +671,65 @@ async function deleteTripsBulkSafe(tripIds = []) {
 }
 
 /* =====================================================
-   USER CONFIG HELPERS
+   LEGACY / BACKWARD COMPAT SHIMS
+   Purane function names ko naye functions pe map kiya
+   taake app.js ki baaki jagah break na ho.
+   (Baad mein app.js update hone ke baad hata dein)
    ===================================================== */
-async function loadUserConfigSafe(userId) {
-  try {
-    const doc = await db.collection(COL_CONFIGS).doc(userId).get();
-
-    if (!doc.exists) {
-      const defaults = {
-        vehicles: [...DEFAULT_VEHICLES],
-        batches: [...DEFAULT_BATCHES],
-        boys: [...DEFAULT_BOYS],
-        updatedAt: FieldValue.serverTimestamp()
-      };
-      await db.collection(COL_CONFIGS).doc(userId).set(defaults);
-      return defaults;
-    }
-
-    const d = doc.data();
-    return {
-      vehicles: Array.isArray(d.vehicles) && d.vehicles.length ? d.vehicles : [...DEFAULT_VEHICLES],
-      batches:  Array.isArray(d.batches)  && d.batches.length  ? d.batches  : [...DEFAULT_BATCHES],
-      boys:     Array.isArray(d.boys)                          ? d.boys     : [],
-      updatedAt: d.updatedAt || null
-    };
-  } catch (err) {
-    console.warn('⚠️ Config load failed:', err.message);
-    return {
-      vehicles: [...DEFAULT_VEHICLES],
-      batches:  [...DEFAULT_BATCHES],
-      boys:     []
-    };
-  }
+async function loadUserConfigSafe() {
+  // eslint-disable-next-line
+  return loadGlobalConfigSafe();
 }
 
-async function saveUserConfigSafe(userId, config) {
-  try {
-    await db.collection(COL_CONFIGS).doc(userId).set({
-      vehicles: config.vehicles || [],
-      batches:  config.batches  || [],
-      boys:     config.boys     || [],
-      updatedAt: FieldValue.serverTimestamp()
-    }, { merge: true });
-    return true;
-  } catch (err) {
-    console.error('❌ Config save failed:', err);
-    return false;
-  }
+async function saveUserConfigSafe(_uidIgnored, config) {
+  // eslint-disable-next-line
+  return saveGlobalConfigSafe(config, currentEditorInfo());
+}
+
+async function loadTodayTripSafe(_uidIgnored, dateStr) {
+  return loadTripByDateSafe(dateStr);
+}
+
+async function saveTodayTripSafe(_uidIgnored, dateStr, payload) {
+  return saveTripByDateSafe(dateStr, payload, currentEditorInfo());
+}
+
+async function loadTripsSafe() {
+  return loadAllTripsSafe(3, 300);
+}
+
+/* =====================================================
+   EDITOR INFO HELPER
+   Returns current signed-in admin's info for tracking.
+   ===================================================== */
+function currentEditorInfo() {
+  const user = auth.currentUser;
+  if (!user) return { uid: 'unknown', email: '', name: 'Unknown' };
+  const email = user.email || '';
+  return {
+    uid:   user.uid,
+    email,
+    name:  user.displayName || email.split('@')[0] || 'Admin'
+  };
 }
 
 /* =====================================================
    GLOBAL EXPOSE (debugging + app.js use)
    ===================================================== */
 window.__ff = {
+  // Core
   auth,
   db,
   FieldValue,
 
+  // Collection names
   COL_USERS,
   COL_ADMINS,
   COL_CONFIGS,
   COL_TRIPS,
+  GLOBAL_CONFIG_DOC,
 
+  // Users & admins
   registerUserSafe,
   isAdmin,
   hasAnyAdmin,
@@ -545,23 +738,42 @@ window.__ff = {
   listAdmins,
   listAllUsers,
 
+  // Global config
+  loadGlobalConfigSafe,
+  saveGlobalConfigSafe,
+  saveLayoutSafe,
+  subscribeToConfig,
+
+  // Trips (shared)
+  todayDocId,
+  saveTripByDateSafe,
+  loadTripByDateSafe,
+  deleteTripByDateSafe,
+  loadAllTripsSafe,
+  subscribeToRecentTrips,
+  subscribeToTodayTrip,
   cleanupOldTrips,
-  loadTripsSafe,
-  saveTripSafe,
   deleteTripSafe,
   deleteTripsBulkSafe,
 
-  todayDocId,
-  saveTodayTripSafe,
-  loadTodayTripSafe,
-  deleteTodayTripSafe,
-
+  // Legacy shims (kept for compatibility)
   loadUserConfigSafe,
   saveUserConfigSafe,
+  loadTodayTripSafe,
+  saveTodayTripSafe,
+  loadTripsSafe,
 
+  // Helpers
+  currentEditorInfo,
+
+  // Constants
   DEFAULT_VEHICLES,
   DEFAULT_BATCHES,
+  DEFAULT_LAYOUT,
   SUPER_ADMIN_EMAILS
 };
 
-console.log('%c🚀 FareFlow Firebase ready (v3.0)', 'color:#f6d365;font-weight:bold;');
+console.log(
+  '%c🚀 FareFlow Firebase ready (v4.0 — Global Shared + Real-Time)',
+  'color:#f6d365;font-weight:bold;'
+);

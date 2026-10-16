@@ -1,10 +1,14 @@
 /* =====================================================
-   FAREFLOW — GLASSMORPHISM STYLES v3
+   FAREFLOW — GLASSMORPHISM STYLES v4.0
+   • Global shared data model support
+   • Layout customization (blur/opacity/radius/shadow)
+   • Directional sub-tab slide animations
+   • Staggered card entry (immersive)
+   • Indicator centering fix
    • Golden Theme • Light/Dark/System
-   • Sliding Tab Indicators (gold, centered)
-   • Boot loader + Skeleton screen
-   • Sparkle button effect (sparkle-btn)
-   • Boys card restructured (2-row responsive)
+   • Boot loader + Skeleton
+   • Sparkle button effect
+   • Boys card restructured
    • Filter tabs (Present / Absent / Not Paid)
    • Girls total display
    • System-theme toast & scrollbars
@@ -25,9 +29,14 @@
   --glass-bg: rgba(255, 255, 255, 0.06);
   --glass-bd: rgba(246, 211, 101, 0.22);
   --glass-hi: rgba(255, 255, 255, 0.12);
-  --shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+
+  /* Shadow uses --shadow-depth multiplier set by app.js */
+  --shadow-depth: 0.5;
+  --shadow: 0 8px 32px rgba(0, 0, 0, calc(0.4 * var(--shadow-depth) + 0.1));
+
   --radius: 18px;
   --blur: 22px;
+  --glass-sat: 160%;
   --t-fast: 0.18s cubic-bezier(0.4, 0, 0.2, 1);
   --t-med: 0.35s cubic-bezier(0.4, 0, 0.2, 1);
   --t-slow: 0.6s cubic-bezier(0.4, 0, 0.2, 1);
@@ -55,7 +64,7 @@
   --glass-bg: rgba(255, 255, 255, 0.55);
   --glass-bd: rgba(212, 160, 23, 0.35);
   --glass-hi: rgba(255, 255, 255, 0.85);
-  --shadow: 0 8px 32px rgba(139, 105, 20, 0.18);
+  --shadow: 0 8px 32px rgba(139, 105, 20, calc(0.18 * var(--shadow-depth) + 0.05));
 
   --sb-track: rgba(139, 105, 20, 0.08);
   --sb-thumb: rgba(212, 160, 23, 0.55);
@@ -113,7 +122,7 @@ body.no-scroll { overflow: hidden; }
 *::-webkit-scrollbar-thumb:hover { background: var(--sb-thumb-hover); background-clip: padding-box; }
 
 /* =====================================================
-   BOOT LOADER — uses <progress> + <output>
+   BOOT LOADER
    ===================================================== */
 .boot-loader {
   position: fixed;
@@ -150,7 +159,6 @@ body.no-scroll { overflow: hidden; }
   animation: shimmer 3s linear infinite;
 }
 
-/* Native <progress> styled as glowing gold bar */
 .boot-bar {
   -webkit-appearance: none;
   appearance: none;
@@ -164,13 +172,11 @@ body.no-scroll { overflow: hidden; }
   overflow: hidden;
 }
 
-/* Track (WebKit) */
 .boot-bar::-webkit-progress-bar {
   background: var(--skel-base);
   border-radius: 999px;
 }
 
-/* Value (WebKit) */
 .boot-bar::-webkit-progress-value {
   background: linear-gradient(90deg, var(--gold-1), var(--gold-2), var(--amber));
   border-radius: 999px;
@@ -178,7 +184,6 @@ body.no-scroll { overflow: hidden; }
   transition: width 0.3s ease;
 }
 
-/* Value (Firefox) */
 .boot-bar::-moz-progress-bar {
   background: linear-gradient(90deg, var(--gold-1), var(--gold-2), var(--amber));
   border-radius: 999px;
@@ -205,7 +210,7 @@ body.no-scroll { overflow: hidden; }
 }
 
 /* =====================================================
-   SKELETON — uses <hr>, <i>, <aside>, <section>, <article>
+   SKELETON
    ===================================================== */
 .app-skeleton {
   position: fixed;
@@ -228,7 +233,6 @@ body.no-scroll { overflow: hidden; }
   border-radius: 18px;
 }
 
-/* <hr> — reset native styles and use as skeleton bar */
 .skel-line {
   border: none;
   outline: none;
@@ -246,7 +250,6 @@ body.no-scroll { overflow: hidden; }
 .skel-line.w-80 { width: 80%; }
 .skel-line.w-90 { width: 90%; }
 
-/* <i> — skeleton circle */
 .skel-circle {
   display: inline-block;
   width: 40px;
@@ -267,7 +270,6 @@ body.no-scroll { overflow: hidden; }
   border-radius: 18px;
 }
 
-/* <aside> — skeleton chip */
 .skel-chip {
   display: block;
   flex: 1;
@@ -293,7 +295,6 @@ body.no-scroll { overflow: hidden; }
   margin: 0.9rem 0;
 }
 
-/* <aside> — skeleton block */
 .skel-block {
   display: block;
   height: 80px;
@@ -361,9 +362,7 @@ body::after {
 
 [data-theme="light"] #bg-canvas { opacity: 0.35; }
 
-/* =====================================================
-   PWA INSTALL PROMPT — uses <aside>, <section>, <output>, <menu>, <li>
-   ===================================================== */
+/* ============ PWA INSTALL PROMPT ============ */
 .pwa-install {
   position: fixed;
   left: 50%;
@@ -407,14 +406,16 @@ body::after {
 .glass-card {
   position: relative;
   background: var(--glass-bg);
-  backdrop-filter: blur(var(--blur)) saturate(160%);
-  -webkit-backdrop-filter: blur(var(--blur)) saturate(160%);
+  backdrop-filter: blur(var(--blur)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(var(--glass-sat));
   border: 1px solid var(--glass-bd);
   border-radius: var(--radius);
   box-shadow: var(--shadow), inset 0 1px 0 var(--glass-hi);
   padding: 1.1rem 1rem;
   overflow: hidden;
-  transition: transform var(--t-med), box-shadow var(--t-med), border-color var(--t-med);
+  transition: transform var(--t-med), box-shadow var(--t-med),
+              border-color var(--t-med), backdrop-filter var(--t-med),
+              background var(--t-med);
   animation: cardEnter 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
@@ -540,7 +541,6 @@ body::after {
 
 .sparkle-btn.burst::before { opacity: 1; }
 
-/* Sparkle particles container — now <i> in JS */
 .sparkle-layer {
   position: absolute;
   inset: 0;
@@ -614,9 +614,7 @@ body::after {
   to   { transform: translateX(100%); }
 }
 
-/* =====================================================
-   PENDING VIEW — uses <output> for icon
-   ===================================================== */
+/* ============ PENDING VIEW ============ */
 #pending-view {
   display: none;
   place-items: center;
@@ -844,7 +842,9 @@ body::after {
   animation: slideDown 0.6s 0.1s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-/* Indicator is now <i> — ensure it renders as block */
+/* Indicator — positioned via JS with translateX.
+   left: 0 means it starts at padding box origin, and JS positions
+   it precisely using getBoundingClientRect (accounting for padding). */
 .tab-indicator,
 .subtab-indicator {
   position: absolute;
@@ -918,6 +918,8 @@ body::after {
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
   scroll-behavior: smooth;
+  /* Prevent horizontal swipe-jerk on some browsers */
+  touch-action: pan-y;
 }
 
 .subtabs::-webkit-scrollbar { display: none; }
@@ -979,6 +981,9 @@ body::after {
 
 .subtab.active strong { font-weight: 700; }
 
+/* =====================================================
+   SUB-TAB PANEL — DIRECTIONAL SLIDE + STAGGER
+   ===================================================== */
 .subtab-panel { display: none; }
 .subtab-panel.active {
   display: block;
@@ -990,6 +995,60 @@ body::after {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* Directional slides (set by app.js based on forward/backward) */
+.subtab-panel.active.slide-from-left {
+  animation: slideFromLeft 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.subtab-panel.active.slide-from-right {
+  animation: slideFromRight 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes slideFromLeft {
+  0%   { opacity: 0; transform: translateX(60px) scale(0.98); }
+  100% { opacity: 1; transform: translateX(0)   scale(1); }
+}
+
+@keyframes slideFromRight {
+  0%   { opacity: 0; transform: translateX(-60px) scale(0.98); }
+  100% { opacity: 1; transform: translateX(0)    scale(1); }
+}
+
+/* Staggered card entry inside panels */
+.subtab-panel.active > .glass-card,
+.subtab-panel.active > article > .glass-card,
+.subtab-panel.active > section > .glass-card {
+  animation: staggerCard 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.subtab-panel.active > .glass-card:nth-child(1),
+.subtab-panel.active > article:nth-of-type(1) > .glass-card,
+.subtab-panel.active > section:nth-of-type(1) > .glass-card {
+  animation-delay: 0s;
+}
+.subtab-panel.active > .glass-card:nth-child(2),
+.subtab-panel.active > article:nth-of-type(2) > .glass-card,
+.subtab-panel.active > section:nth-of-type(2) > .glass-card {
+  animation-delay: 0.14s;
+}
+.subtab-panel.active > .glass-card:nth-child(3),
+.subtab-panel.active > article:nth-of-type(3) > .glass-card,
+.subtab-panel.active > section:nth-of-type(3) > .glass-card {
+  animation-delay: 0.28s;
+}
+.subtab-panel.active > .glass-card:nth-child(4) {
+  animation-delay: 0.42s;
+}
+
+@keyframes staggerCard {
+  0%   { opacity: 0; transform: translateY(24px) scale(0.985); }
+  100% { opacity: 1; transform: translateY(0)    scale(1); }
+}
+
+/* Also stagger two cards inside the trip panel (Trip Date + Vehicles) */
+#entry-subtab-trip .glass-card .card-head.mt ~ * {
+  animation: staggerCard 0.55s 0.14s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 /* ============ CARDS ============ */
 .card-head { margin-bottom: 0.9rem; }
 
@@ -997,6 +1056,13 @@ body::after {
   font-size: 1rem;
   font-weight: 600;
   letter-spacing: 0.3px;
+}
+
+.card-head h3 {
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--gold-1);
 }
 
 .card-head .hint {
@@ -1539,9 +1605,7 @@ body::after {
   white-space: nowrap;
 }
 
-/* =====================================================
-   GIRLS TOTAL DISPLAY — now <output>
-   ===================================================== */
+/* ============ GIRLS TOTAL DISPLAY ============ */
 .girls-total-display {
   display: flex;
   justify-content: space-between;
@@ -1641,7 +1705,6 @@ body::after {
   color: var(--green);
 }
 
-/* Now <output> */
 .expenses-total {
   display: flex;
   justify-content: space-between;
@@ -1913,6 +1976,142 @@ body::after {
   box-shadow: 0 0 0 3px rgba(246, 211, 101, 0.15);
 }
 
+/* =====================================================
+   LAYOUT TAB (Settings) — sliders + preview
+   ===================================================== */
+.layout-field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "label value"
+    "slider slider";
+  gap: 0.4rem 0.6rem;
+  align-items: center;
+  margin-bottom: 1.1rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--glass-bd);
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+
+.layout-field:hover {
+  border-color: rgba(246, 211, 101, 0.35);
+  background: rgba(246, 211, 101, 0.03);
+}
+
+.layout-field em {
+  grid-area: label;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  font-style: normal;
+}
+
+.layout-field output {
+  grid-area: value;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--gold-1);
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
+  background: rgba(246, 211, 101, 0.12);
+  min-width: 52px;
+  text-align: center;
+}
+
+/* Custom gold range slider */
+.layout-field input[type="range"] {
+  grid-area: slider;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg,
+              rgba(246, 211, 101, 0.4) 0%,
+              rgba(212, 160, 23, 0.4) 100%);
+  outline: none;
+  cursor: pointer;
+  transition: background var(--t-fast);
+}
+
+[data-theme="light"] .layout-field input[type="range"] {
+  background: linear-gradient(90deg,
+              rgba(212, 160, 23, 0.35) 0%,
+              rgba(139, 105, 20, 0.35) 100%);
+}
+
+.layout-field input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--gold-1), var(--gold-2));
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.35),
+    0 0 12px rgba(246, 211, 101, 0.5);
+  cursor: pointer;
+  transition: transform var(--t-fast), box-shadow var(--t-fast);
+}
+
+.layout-field input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow:
+    0 2px 10px rgba(0, 0, 0, 0.45),
+    0 0 20px rgba(246, 211, 101, 0.75);
+}
+
+.layout-field input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--gold-1), var(--gold-2));
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.35),
+    0 0 12px rgba(246, 211, 101, 0.5);
+  cursor: pointer;
+}
+
+.layout-field input[type="range"]::-moz-range-thumb:hover {
+  box-shadow:
+    0 2px 10px rgba(0, 0, 0, 0.45),
+    0 0 20px rgba(246, 211, 101, 0.75);
+}
+
+/* Live preview card */
+.layout-preview-card {
+  border-color: rgba(246, 211, 101, 0.45) !important;
+  background: var(--glass-bg) !important;
+  margin-bottom: 1rem;
+}
+
+.layout-preview-card .card-head h2 {
+  color: var(--gold-1);
+}
+
+/* Layout action buttons */
+.layout-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+  list-style: none;
+}
+
+.layout-actions > li {
+  flex: 1;
+  min-width: 140px;
+}
+
+.layout-actions .btn-primary,
+.layout-actions .btn-ghost {
+  margin-top: 0;
+}
+
 /* ============ MODAL ============ */
 .modal {
   width: min(580px, 92vw);
@@ -2085,8 +2284,9 @@ body::after {
   .subtab em { width: 30px; height: 30px; font-size: 0.8rem; }
   .subtab strong { font-size: 0.78rem; }
 
-  .glass-card { padding: 1.6rem 1.5rem; border-radius: 22px; }
+  .glass-card { padding: 1.6rem 1.5rem; }
   .card-head h2 { font-size: 1.15rem; }
+  .card-head h3 { font-size: 1rem; }
   .card-head .hint { font-size: 0.82rem; }
 
   .vehicle-grid {
@@ -2125,6 +2325,8 @@ body::after {
   .modal-section { padding: 1rem; }
   .modal-section h3 { font-size: 0.88rem; }
   .modal-section li { font-size: 0.88rem; }
+
+  .layout-actions > li { min-width: 180px; }
 }
 
 @media (min-width: 1440px) {
@@ -2137,7 +2339,7 @@ body::after {
 
 @media (max-width: 480px) {
   .view { padding: 0.7rem; }
-  .glass-card { padding: 0.95rem 0.85rem; border-radius: 15px; }
+  .glass-card { padding: 0.95rem 0.85rem; }
   .brand { font-size: 1.9rem; }
   .boot-brand { font-size: 1.6rem; }
   .auth-card { padding: 1.8rem 1.3rem; }
@@ -2195,6 +2397,9 @@ body::after {
   .pwa-actions { justify-content: flex-end; }
 
   .girls-total-display strong { font-size: 1rem; }
+
+  .layout-actions { flex-direction: column; }
+  .layout-actions > li { min-width: 100%; }
 }
 
 /* ============ REDUCED MOTION ============ */
@@ -2217,4 +2422,5 @@ body::after {
   .history-item:hover { transform: none; }
   .icon-btn:hover { transform: none; }
   .boy-row:hover { background: rgba(255, 255, 255, 0.03); }
+  .layout-field:hover { background: rgba(255, 255, 255, 0.02); }
 }
